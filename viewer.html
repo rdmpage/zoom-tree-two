@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>zoom-tree-two</title>
+<style>
+	html, body
+	{
+		margin: 0;
+		padding: 0;
+		height: 100%;
+		font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+		font-size: 11px;
+		color: #222;
+	}
+
+	#viewer
+	{
+		position: absolute;
+		inset: 0;
+		overflow: auto;
+		background: #fff;
+		user-select: none;
+		-webkit-user-select: none;
+	}
+
+	#pages
+	{
+		position: relative;
+		width: max-content;
+	}
+
+	.page
+	{
+		position: relative;
+		width: 100%;
+		box-sizing: border-box;
+	}
+
+	.row
+	{
+		width: 100%;
+		overflow: visible;
+		box-sizing: border-box;
+	}
+
+	.row svg          { display: block; }
+	.row svg path     { stroke: #222; stroke-width: 1; fill: none; shape-rendering: crispEdges; }
+	.row svg .g-dot   { fill: #222; stroke: none; }
+	.row svg .g-circle{ fill: #fff; stroke: #222; stroke-width: 1; }
+	.row svg .g-tri   { fill: #d6d6d6; stroke: #555; stroke-width: 1; }
+	.row svg text     { font-family: -apple-system, "Helvetica Neue", sans-serif; font-size: 11px; dominant-baseline: middle; fill: #222; }
+	.row svg .g-internal { fill: #222; }
+	.row svg .g-closed   { fill: #222; }
+
+	#status
+	{
+		position: fixed;
+		bottom: 6px;
+		right: 8px;
+		font-size: 10px;
+		color: #888;
+		background: rgba(255,255,255,0.85);
+		padding: 2px 6px;
+		border-radius: 3px;
+		pointer-events: none;
+	}
+
+	#controls
+	{
+		position: fixed;
+		top: 6px;
+		right: 8px;
+		display: flex;
+		gap: 4px;
+	}
+
+	#controls button
+	{
+		width: 28px;
+		height: 28px;
+		border: 1px solid #aaa;
+		background: #fff;
+		font-size: 16px;
+		line-height: 26px;
+		text-align: center;
+		cursor: pointer;
+		border-radius: 4px;
+	}
+
+	#controls button:disabled
+	{
+		color: #ccc;
+		cursor: default;
+	}
+</style>
+</head>
+<body>
+
+<div id="viewer">
+	<div id="pages"></div>
+</div>
+
+<div id="controls">
+	<button id="zoom-out" type="button" title="Zoom out (-)">&minus;</button>
+	<button id="zoom-in"  type="button" title="Zoom in (+)">+</button>
+</div>
+
+<div id="status">loading…</div>
+
+<script src="src/js/glyph.js"></script>
+<script src="src/js/viewer.js"></script>
+<script>
+	(function ()
+	{
+		var params = new URLSearchParams(window.location.search);
+		var id = params.get('id') || '62057be74ac6';  // default = gekkota for dev convenience
+
+		var status  = document.getElementById('status');
+		var btnIn   = document.getElementById('zoom-in');
+		var btnOut  = document.getElementById('zoom-out');
+
+		fetch('trees/' + id + '.json')
+			.then(function (r)
+			{
+				if (!r.ok) { throw new Error('HTTP ' + r.status); }
+				return r.json();
+			})
+			.then(function (tree)
+			{
+				var viewer = new PageViewer({
+					tree:    tree,
+					viewer:  document.getElementById('viewer'),
+					pages:   document.getElementById('pages'),
+					zoom:    tree.config.max_zoom,
+					onChange: function (v)
+					{
+						status.textContent = id + '  n=' + v.visibleIds.length + '/' + tree.n +
+							'  z=' + v.zoom + '/' + tree.config.max_zoom;
+						btnIn.disabled  = (v.zoom >= tree.config.max_zoom);
+						btnOut.disabled = (v.zoom <= tree.config.min_zoom);
+					}
+				});
+				viewer.render();
+
+				btnIn.addEventListener('click',  function () { viewer.setZoom(viewer.zoom + 1); });
+				btnOut.addEventListener('click', function () { viewer.setZoom(viewer.zoom - 1); });
+			})
+			.catch(function (e)
+			{
+				status.textContent = 'error: ' + e.message;
+			});
+	})();
+</script>
+
+</body>
+</html>
