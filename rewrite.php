@@ -27,6 +27,33 @@ require_once __DIR__ . '/src/php/tree-parse.php';
 require_once __DIR__ . '/build.php';   // for strip_newick_comments
 
 //-----------------------------------------------------------------------------
+// Shared CLI helper — derive a sibling output path from an input path.
+// `sibling_path('test-data/tree.tre', '_clean')` → 'test-data/tree_clean.tre'.
+// Pass $new_ext to override (e.g. '_labels' + 'txt' → 'tree_labels.txt').
+//-----------------------------------------------------------------------------
+
+function sibling_path($input, $suffix, $new_ext = null)
+{
+	$info = pathinfo($input);
+	$dir  = isset($info['dirname']) ? $info['dirname'] : '.';
+	$name = isset($info['filename']) ? $info['filename'] : 'out';
+
+	if ($new_ext === null)
+	{
+		$ext = isset($info['extension']) ? $info['extension'] : '';
+	}
+	else
+	{
+		$ext = $new_ext;
+	}
+
+	$path = ($dir === '.' || $dir === '') ? $name : ($dir . '/' . $name);
+	$path .= $suffix;
+	if ($ext !== '') { $path .= '.' . $ext; }
+	return $path;
+}
+
+//-----------------------------------------------------------------------------
 // CLI
 //-----------------------------------------------------------------------------
 
@@ -34,20 +61,19 @@ function rewrite_main($argv)
 {
 	$mode  = 'auto';
 	$input = null;
+	$out   = null;
 
 	for ($i = 1; $i < count($argv); $i++)
 	{
 		$a = $argv[$i];
-		if (preg_match('/^--internal=(.+)$/', $a, $m))
-		{
-			$mode = $m[1];
-		}
+		if (preg_match('/^--internal=(.+)$/', $a, $m))     { $mode = $m[1]; }
+		else if (preg_match('/^--out=(.+)$/', $a, $m))     { $out = $m[1]; }
 		else if ($a === '-h' || $a === '--help')
 		{
 			fwrite(STDERR, file_get_contents(__FILE__, false, null, 0, 1400));
 			exit(0);
 		}
-		else if ($a[0] === '-')
+		else if ($a !== '' && $a[0] === '-')
 		{
 			fwrite(STDERR, "rewrite.php: unknown option '$a'\n");
 			exit(1);
@@ -67,19 +93,27 @@ function rewrite_main($argv)
 
 	if ($input === null)
 	{
-		$newick = stream_get_contents(STDIN);
-	}
-	else
-	{
-		$newick = @file_get_contents($input);
-		if ($newick === false)
-		{
-			fwrite(STDERR, "rewrite.php: cannot read $input\n");
-			exit(1);
-		}
+		fwrite(STDERR, "usage: php rewrite.php [--internal=MODE] [--out=PATH] tree.tre\n");
+		fwrite(STDERR, "       default output is <tree>_clean.<ext> next to the input.\n");
+		exit(1);
 	}
 
-	echo rewrite_newick($newick, $mode) . "\n";
+	$newick = @file_get_contents($input);
+	if ($newick === false)
+	{
+		fwrite(STDERR, "rewrite.php: cannot read $input\n");
+		exit(1);
+	}
+
+	$cleaned = rewrite_newick($newick, $mode);
+	$out_path = ($out !== null) ? $out : sibling_path($input, '_clean');
+
+	if (file_put_contents($out_path, $cleaned . "\n") === false)
+	{
+		fwrite(STDERR, "rewrite.php: cannot write $out_path\n");
+		exit(1);
+	}
+	fwrite(STDERR, "rewrite.php: wrote $out_path\n");
 }
 
 //-----------------------------------------------------------------------------

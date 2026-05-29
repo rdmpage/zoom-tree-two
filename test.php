@@ -8,8 +8,9 @@
 // main when invoked as a script) and call build_v1_json() directly.
 
 require_once __DIR__ . '/build.php';
-require_once __DIR__ . '/label.php';        // infer_group_labels(), label_newick()
-require_once __DIR__ . '/prune-labels.php'; // prune_leaf_labels()
+require_once __DIR__ . '/rewrite.php';        // format_label()
+require_once __DIR__ . '/read_labels.php';    // read_mapping, rename_by_mapping, apply_lineage_labels
+require_once __DIR__ . '/transform_taxhierarchy.php';  // transform_label()
 
 $PASS = 0;
 $FAIL = 0;
@@ -232,221 +233,13 @@ eq(array_values($bs_m),   array('95'),   'mixed: one bootstrap value captured');
 eq(array_values($post_m), array('0.98'), 'mixed: one posterior value captured');
 
 //-----------------------------------------------------------------------------
-// label.php — infer internal labels from leaf-name groups.
+// (Removed: v1 labelling tests for label.php, parse_tsv_string,
+// expand_to_leaves, infer_tsv_labels, infer_group_labels, --token,
+// --key-tokens, --key-from, and prune_leaf_labels.  Those scripts moved
+// to attic/ while we redesign the labelling pipeline around
+// write_labels.php / transform_*.php / read_labels.php.)
 //-----------------------------------------------------------------------------
 
-function internal_labels_in_tree($t)
-{
-	$out = array();
-	$it  = new NodeIterator($t->GetRoot());
-	$q   = $it->Begin();
-	while ($q != null)
-	{
-		if (!$q->IsLeaf())
-		{
-			$lab = $q->GetLabel();
-			if ($lab !== '' && $lab !== null)
-			{
-				$out[] = $lab;
-			}
-		}
-		$q = $it->Next();
-	}
-	return $out;
-}
-
-// Case 1: monophyletic Aa clade gets labelled.
-$nwk1 = strip_newick_comments("(((Aa_x:1,Aa_y:1):1,Bb_z:1):1,Cc_v:1);");
-$t1   = parse_newick($nwk1);
-$s1   = infer_group_labels($t1, ' ');
-eq($s1['labelled'],         1, 'label monophyletic: 1 group labelled');
-eq($s1['singletons'],       2, 'label monophyletic: 2 singletons');
-eq($s1['not_monophyletic'], 0, 'label monophyletic: 0 non-monophyletic');
-eq($s1['pre_labelled'],     0, 'label monophyletic: 0 pre-labelled');
-eq(internal_labels_in_tree($t1), array('Aa'), 'label monophyletic: Aa applied to LCA');
-
-// Case 2: Aa species split across non-adjacent clades — skipped.
-$nwk2 = strip_newick_comments("(((Aa_x:1,Bb_x:1):1,Aa_y:1):1,Cc_v:1);");
-$t2   = parse_newick($nwk2);
-$s2   = infer_group_labels($t2, ' ');
-eq($s2['labelled'],         0, 'label paraphyletic: 0 labelled');
-eq($s2['not_monophyletic'], 1, 'label paraphyletic: 1 non-monophyletic');
-eq(internal_labels_in_tree($t2), array(), 'label paraphyletic: no labels added');
-
-// Case 3: pre-labelled LCA is not overwritten.
-$nwk3 = strip_newick_comments("(((Aa_x:1,Aa_y:1)Existing:1,Bb_z:1):1,Cc_v:1);");
-$t3   = parse_newick($nwk3);
-$s3   = infer_group_labels($t3, ' ');
-eq($s3['labelled'],     0, 'label pre-existing: 0 labelled');
-eq($s3['pre_labelled'], 1, 'label pre-existing: 1 pre-labelled');
-eq(internal_labels_in_tree($t3), array('Existing'), 'label pre-existing: existing label preserved');
-
-// Case 4: end-to-end — labels survive build, and a [&bootstrap=N] on the same
-// internal also survives the round trip.
-$nwk4 = "(((Aa_x:1,Aa_y:1)[&bootstrap=95]:1,Bb_z:1):1,Cc_v:1);";
-$t4   = parse_newick(strip_newick_comments($nwk4));
-infer_group_labels($t4, ' ');
-$out4 = emit_newick($t4->GetRoot()) . ';';
-$j4   = build_v1_json($out4);
-
-$found_aa_id = -1;
-for ($i = 0; $i < $j4['n']; $i++)
-{
-	if ($j4['labels'][$i] === 'Aa')
-	{
-		$found_aa_id = $i;
-		break;
-	}
-}
-ok($found_aa_id >= 0,                     'label round-trip: Aa internal label in JSON');
-eq($j4['bootstrap'][$found_aa_id], '95',  'label round-trip: bootstrap=95 still on that node');
-
-//-----------------------------------------------------------------------------
-// label.php --from-tsv: TSV reader, expansion, monophyly-based labelling.
-//-----------------------------------------------------------------------------
-
-$tsv_content = "taxon\tmembers\n" .
-               "Fooidae\tAa,Bb\n" .
-               "OrderX\tFooidae,Cc\n" .
-               "\n" .                          // blank lines are ignored
-               "BarFam\tDd\n";
-
-$taxa = parse_tsv_string($tsv_content);
-eq(count($taxa),       3,                            'tsv parse: 3 data rows (header + blank skipped)');
-eq($taxa['Fooidae'],   array('Aa', 'Bb'),            'tsv parse: Fooidae members');
-eq($taxa['OrderX'],    array('Fooidae', 'Cc'),       'tsv parse: OrderX members (forward ref to Fooidae)');
-eq($taxa['BarFam'],    array('Dd'),                  'tsv parse: BarFam members');
-ok(!isset($taxa['taxon']),                           'tsv parse: header row skipped');
-
-// expand_to_leaves: OrderX -> Fooidae -> {Aa, Bb}, plus Cc -> {Aa, Bb, Cc}.
-$cache = array();
-$leaves = expand_to_leaves('OrderX', $taxa, $cache);
-sort($leaves);
-eq($leaves, array('Aa', 'Bb', 'Cc'), 'tsv expand: OrderX resolves to Aa, Bb, Cc');
-
-// "Unknown" taxon: treated as leaf-level key, returns itself.
-$leaves2 = expand_to_leaves('NotInTsv', $taxa, $cache);
-eq($leaves2, array('NotInTsv'), 'tsv expand: unknown taxon treated as leaf key');
-
-// End-to-end: small Newick + TSV -> Fooidae and OrderX both labelled.
-$nwk_tsv = "(((Aa_x:1,Aa_y:1):1,(Bb_p:1,Bb_q:1):1):1,Cc_v:1);";
-$t_tsv   = parse_newick(strip_newick_comments($nwk_tsv));
-$s_tsv   = infer_tsv_labels($t_tsv, $taxa, ' ');
-
-eq($s_tsv['labelled'],         2, 'tsv infer: 2 taxa labelled');
-eq($s_tsv['not_monophyletic'], 0, 'tsv infer: 0 not-monophyletic');
-eq($s_tsv['pre_labelled'],     0, 'tsv infer: 0 pre-labelled');
-
-$labels_tsv = internal_labels_in_tree($t_tsv);
-sort($labels_tsv);
-eq($labels_tsv, array('Fooidae', 'OrderX'), 'tsv infer: Fooidae and OrderX applied');
-
-// "BarFam" has zero leaves in the tree -> unmatched.
-ok($s_tsv['unmatched'] >= 1, 'tsv infer: BarFam (no leaves) counted as unmatched');
-
-// Loose vs strict: a clade with an *unclassified* extra leaf is labelled in
-// loose mode (default) but rejected by strict mode.  Here Zz_q is not in
-// any TSV taxon — it's tolerated.
-$tsv_loose      = parse_tsv_string("taxon\tmembers\nFooidae\tAa,Bb\n");
-$nwk_unclass    = "(((Aa_x:1,Aa_y:1):1,(Bb_p:1,Zz_q:1):1):1,Cc_v:1);";
-$t_loose        = parse_newick(strip_newick_comments($nwk_unclass));
-$s_loose        = infer_tsv_labels($t_loose, $tsv_loose, ' ', false);
-eq($s_loose['labelled'],         1, 'tsv loose: Fooidae labelled despite unclassified Zz_q in subtree');
-eq($s_loose['not_monophyletic'], 0, 'tsv loose: 0 not_monophyletic');
-
-$t_strict = parse_newick(strip_newick_comments($nwk_unclass));
-$s_strict = infer_tsv_labels($t_strict, $tsv_loose, ' ', true);
-eq($s_strict['labelled'],         0, 'tsv strict: Fooidae rejected (subtree size != member count)');
-eq($s_strict['not_monophyletic'], 1, 'tsv strict: 1 not_monophyletic');
-
-// Even in loose mode, a *competing* TSV taxon's leaf in the subtree blocks
-// the label.  Here Cc is defined under BarFam but lives inside Fooidae's
-// LCA, so Fooidae is genuinely paraphyletic.
-$tsv_conflict = parse_tsv_string("taxon\tmembers\nFooidae\tAa,Bb\nBarFam\tCc\n");
-$nwk_conflict = "(((Aa_x:1,Cc_v:1):1,Bb_p:1):1,Dd_q:1);";
-$t_conflict   = parse_newick(strip_newick_comments($nwk_conflict));
-$s_conflict   = infer_tsv_labels($t_conflict, $tsv_conflict, ' ', false);
-eq($s_conflict['labelled'],         0, 'tsv loose: Fooidae rejected — Cc (BarFam member) is inside the subtree');
-eq($s_conflict['not_monophyletic'], 1, 'tsv loose: 1 not_monophyletic from real paraphyly');
-
-//-----------------------------------------------------------------------------
-// label.php --token=N: select a non-zero token for multi-rank leaf labels.
-//-----------------------------------------------------------------------------
-
-// Leaves carry "Order Family Genus species" — three levels we might label.
-$nwk_multi  = "(((OrdA_FamA_GenA_spA:1,OrdA_FamA_GenA_spB:1):1,OrdA_FamB_GenC_spC:1):1,OrdB_FamD_GenD_spD:1);";
-
-// token=0 (default): OrdA is monophyletic in the first three leaves.
-$t_t0   = parse_newick(strip_newick_comments($nwk_multi));
-$s_t0   = infer_group_labels($t_t0, ' ', 0);
-eq($s_t0['labelled'], 1, 'token=0: OrdA labelled (3 leaves monophyletic)');
-eq(internal_labels_in_tree($t_t0), array('OrdA'), 'token=0: only OrdA applied');
-
-// token=1: families — FamA has 2 leaves, monophyletic at the innermost clade.
-$t_t1   = parse_newick(strip_newick_comments($nwk_multi));
-$s_t1   = infer_group_labels($t_t1, ' ', 1);
-eq($s_t1['labelled'], 1, 'token=1: FamA labelled');
-eq(internal_labels_in_tree($t_t1), array('FamA'), 'token=1: only FamA applied');
-
-// token=2: genera — GenA has 2 leaves; GenC and GenD are singletons.
-$t_t2   = parse_newick(strip_newick_comments($nwk_multi));
-$s_t2   = infer_group_labels($t_t2, ' ', 2);
-eq($s_t2['labelled'], 1, 'token=2: GenA labelled');
-eq(internal_labels_in_tree($t_t2), array('GenA'), 'token=2: only GenA applied');
-
-// Sequential passes mimic the CLI pipeline.  Run genus first (most specific),
-// then family, then order — earlier wins at any shared LCA.
-$t_seq = parse_newick(strip_newick_comments($nwk_multi));
-infer_group_labels($t_seq, ' ', 2);   // GenA -> innermost clade
-infer_group_labels($t_seq, ' ', 1);   // FamA wants the same clade -> pre-labelled
-infer_group_labels($t_seq, ' ', 0);   // OrdA -> middle clade (still empty)
-$seq_labels = internal_labels_in_tree($t_seq);
-sort($seq_labels);
-eq($seq_labels, array('GenA', 'OrdA'), 'multi-pass: GenA at innermost, OrdA at middle, FamA pre-labelled');
-
-// Reverse order: family wins at innermost, genus skipped.
-$t_seq2 = parse_newick(strip_newick_comments($nwk_multi));
-infer_group_labels($t_seq2, ' ', 0);   // OrdA -> middle clade
-infer_group_labels($t_seq2, ' ', 1);   // FamA -> innermost clade
-infer_group_labels($t_seq2, ' ', 2);   // GenA at same LCA as FamA -> pre-labelled
-$seq2_labels = internal_labels_in_tree($t_seq2);
-sort($seq2_labels);
-eq($seq2_labels, array('FamA', 'OrdA'), 'multi-pass reversed: OrdA + FamA, GenA pre-labelled');
-
-//-----------------------------------------------------------------------------
-// prune-labels.php — keep only specified leaf-label tokens.
-//-----------------------------------------------------------------------------
-
-function leaf_labels_in_tree($t)
-{
-	$out = array();
-	$it  = new NodeIterator($t->GetRoot());
-	$q   = $it->Begin();
-	while ($q != null)
-	{
-		if ($q->IsLeaf())
-		{
-			$out[] = $q->GetLabel();
-		}
-		$q = $it->Next();
-	}
-	return $out;
-}
-
-$nwk_prune = "((OrdA_FamA_GenA_spA_idA:1,OrdA_FamA_GenA_spB_idB:1):1,(OrdB_FamB_GenB_spC_idC:1,Short:1):1);";
-$t_prune   = parse_newick(strip_newick_comments($nwk_prune));
-$changed   = prune_leaf_labels($t_prune, ' ', array(2, 3));
-
-eq($changed, 3, 'prune: 3 leaves changed (Short has too few tokens, unchanged)');
-eq(leaf_labels_in_tree($t_prune),
-   array('GenA spA', 'GenA spB', 'GenB spC', 'Short'),
-   'prune: kept-tokens applied; under-tokenised leaf preserved as-is');
-
-// Internal labels untouched: add one, run prune, confirm it survives.
-$t_prune2 = parse_newick(strip_newick_comments($nwk_prune));
-$t_prune2->GetRoot()->GetChild()->SetLabel('SomeClade');   // first internal child
-prune_leaf_labels($t_prune2, ' ', array(2, 3));
-eq($t_prune2->GetRoot()->GetChild()->GetLabel(), 'SomeClade', 'prune: internal labels untouched');
 
 //-----------------------------------------------------------------------------
 // format_label — keep Newick output unquoted when the label is legal
@@ -463,45 +256,105 @@ eq(format_label("has 'quote'"),                          "'has ''quote'''",     
 eq(format_label('with:colon'),                           "'with:colon'",                               'fmt: colon forbidden -> quoted');
 
 //-----------------------------------------------------------------------------
-// label.php --key-tokens and --key-from
+// transform_taxhierarchy.php — single-label transform.
 //-----------------------------------------------------------------------------
 
-// --key-tokens=1,2: Genus + species composite, monophyletic at innermost.
-$nwk_kt = "(((Genus_burksi_1|x|A:1,Genus_burksi_2|x|A:1):1,Other_thing_3|x|B:1):1,Solo_lone_4|x|C:1);";
-$t_kt   = parse_newick(strip_newick_comments($nwk_kt));
-$s_kt   = infer_group_labels($t_kt, ' ', array('key-tokens' => array(0, 1)));
-eq($s_kt['labelled'], 1, 'key-tokens: Genus_burksi composite labelled');
-eq(internal_labels_in_tree($t_kt), array('Genus burksi'), 'key-tokens: clade carries the composite key');
+$rowA = transform_label('Boraginales Boraginaceae Turricula parryi ERR7621535');
+ok(is_array($rowA),                              'tax: 5-token leaf transformed');
+eq($rowA['cleaned'], 'Turricula parryi',         'tax: cleaned = Genus species');
+eq($rowA['lineage'], 'Boraginales;Boraginaceae;Turricula;Turricula parryi',
+                                                  'tax: lineage hierarchical');
 
-// --key-from=0: stops at the first pipe-bearing token.  Handles
-// "Genus burksi 2|x|A" (-> "Genus burksi") and "Genus sp IT 1|x|B"
-// (-> "Genus sp IT") with the same rule.
-$nwk_kf = "(((Genus_burksi_1|x|A:1,Genus_burksi_2|x|A:1):1,(Genus_sp__IT_1|x|B:1,Genus_sp__IT_2|x|B:1):1):1,Solo_lone_4|x|C:1);";
-$t_kf   = parse_newick(strip_newick_comments($nwk_kf));
-$s_kf   = infer_group_labels($t_kf, ' ', array('key-from' => 0));
-eq($s_kf['labelled'], 2, 'key-from: two species clades labelled');
-$labs_kf = internal_labels_in_tree($t_kf);
-sort($labs_kf);
-eq($labs_kf, array('Genus burksi', 'Genus sp IT'), 'key-from: named + sp species both captured');
-
-// --key-from collapses the `  ` from `__` so the IT survives the stop check.
-// Verify by isolating a single sp-only group.
-$nwk_kf2 = "((Genus_sp__IT_1|x|B:1,Genus_sp__IT_2|x|B:1):1,Other_genus_3|x|C:1);";
-$t_kf2   = parse_newick(strip_newick_comments($nwk_kf2));
-infer_group_labels($t_kf2, ' ', array('key-from' => 0));
-eq(internal_labels_in_tree($t_kf2), array('Genus sp IT'), 'key-from: __ collapse keeps IT in the key');
+eq(transform_label('Trichoptera 396'),  null,    'tax: too few tokens -> skipped');
+eq(transform_label('Foo Bar Baz qux 42 extra'), null, 'tax: too many tokens -> skipped');
+eq(transform_label('lowercase_first Family Genus species ID'), null,
+                                                  'tax: order must start with capital');
 
 //-----------------------------------------------------------------------------
-// prune-labels.php --keep-from
+// read_labels.php — mapping TSV + lineage-driven LCA labelling.
 //-----------------------------------------------------------------------------
 
-$nwk_pkf = "((Family_Genus_burksi_2|1h|FL:1,Family_Genus_sp__IT_1|1h|VA:1):1,Outgroup_only_5|x|Z:1);";
-$t_pkf   = parse_newick(strip_newick_comments($nwk_pkf));
-prune_leaf_labels($t_pkf, ' ', array('from' => 1));
-$leaves_pkf = leaf_labels_in_tree($t_pkf);
-eq($leaves_pkf,
-   array('Genus burksi', 'Genus sp IT', 'only'),
-   'keep-from=1: named + sp species kept cleanly; outgroup keeps only the pre-pipe part');
+function internal_label_set($t)
+{
+	$out = array();
+	$it  = new NodeIterator($t->GetRoot());
+	$q   = $it->Begin();
+	while ($q != null)
+	{
+		if (!$q->IsLeaf())
+		{
+			$lab = $q->GetLabel();
+			if ($lab !== '' && $lab !== null) { $out[$lab] = true; }
+		}
+		$q = $it->Next();
+	}
+	return $out;
+}
+
+// Helper: write a TSV to a tmp file and read it back.
+function tsv_roundtrip($content)
+{
+	$path = tempnam(sys_get_temp_dir(), 'rl-');
+	file_put_contents($path, $content);
+	$rows = read_mapping($path);
+	unlink($path);
+	return $rows;
+}
+
+$tsv1 = "original\tcleaned\tlineage\n" .
+        "Aa\tGenusA spA\tOrder;Family;GenusA\n" .
+        "Ab\tGenusA spB\tOrder;Family;GenusA\n" .
+        "Bb\tGenusB spC\tOrder;Family;GenusB\n";
+$rows = tsv_roundtrip($tsv1);
+eq(count($rows), 3, 'rl: 3 mapping rows (header skipped)');
+eq($rows[0]['original'], 'Aa',                                                'rl: original parsed');
+eq($rows[0]['cleaned'],  'GenusA spA',                                         'rl: cleaned parsed');
+eq($rows[0]['lineage'],  array('Order','Family','GenusA'),                     'rl: lineage exploded by `;`');
+
+// Round-trip apply on a small tree.  Leaves "Aa", "Ab", "Bb" form clade
+// structure (((Aa, Ab), Bb), Outgroup).  After rename + lineage labelling:
+//   - leaves renamed to "GenusA spA", "GenusA spB", "GenusB spC"
+//   - GenusA at the (spA, spB) clade   (LCA size 2 = members)
+//   - Family at the (spA, spB, spC) clade
+//   - Order at the same clade BUT already labelled "Family" -> pre_labelled
+$nwk = "(((Aa:1,Ab:1):1,Bb:1):1,Outgroup:1);";
+$t   = parse_newick(strip_newick_comments($nwk));
+
+$tsv_rows = tsv_roundtrip($tsv1);
+$renamed  = rename_by_mapping($t, $tsv_rows);
+eq($renamed, 3, 'rl: 3 leaves renamed');
+
+$stats = apply_lineage_labels($t, $tsv_rows);
+$labels = internal_label_set($t);
+ok(isset($labels['GenusA']), 'rl: GenusA labelled at inner clade');
+ok(isset($labels['Family']), 'rl: Family labelled at next clade up');
+ok(!isset($labels['Order']), 'rl: Order pre_labelled (same LCA as Family)');
+eq($stats['labelled'], 2,                'rl: 2 taxa labelled (GenusA, Family)');
+eq($stats['pre_labelled'], 1,            'rl: Order pre_labelled');
+
+// Loose monophyly: an unclassified leaf in the subtree is fine.  Here the
+// Outgroup leaf is NOT in the TSV, so the LCA of {GenusA spA, GenusA spB}
+// is still considered monophyletic.  (Already covered by the asserts above
+// since Outgroup is unclassified; this asserts the labelled count
+// explicitly.)
+$nwk2 = "((Aa:1,(Ab:1,Unrelated:1):1):1,Bb:1);";
+$t2 = parse_newick(strip_newick_comments($nwk2));
+rename_by_mapping($t2, $tsv_rows);
+$stats2 = apply_lineage_labels($t2, $tsv_rows);
+$labels2 = internal_label_set($t2);
+// In nwk2, "Unrelated" is unclassified, sits between Aa and Ab.  GenusA's
+// LCA includes Unrelated (which is fine — loose) but does NOT include Bb
+// (a different TSV-defined taxon).  So GenusA monophyletic; Family also.
+ok(isset($labels2['GenusA']), 'rl loose: GenusA labelled despite unclassified Unrelated in clade');
+
+// A conflict: put a different-taxon leaf inside what should be GenusA.
+$nwk3 = "((Aa:1,(Ab:1,Bb:1):1):1,Outgroup:1);";
+$t3 = parse_newick(strip_newick_comments($nwk3));
+rename_by_mapping($t3, $tsv_rows);
+$stats3 = apply_lineage_labels($t3, $tsv_rows);
+$labels3 = internal_label_set($t3);
+ok(!isset($labels3['GenusA']), 'rl loose: GenusA rejected (Bb = different taxon inside)');
+ok(isset($labels3['Family']),  'rl loose: Family still labels the broader LCA where all 3 leaves are together');
 
 //-----------------------------------------------------------------------------
 
