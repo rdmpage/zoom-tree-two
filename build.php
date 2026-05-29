@@ -37,7 +37,192 @@ function read_newick($argv)
 }
 
 //-----------------------------------------------------------------------------
-// Reject multifurcations.  v1 is binary-only by design (see PLAN.md).
+// Collapse unary internals: replace any internal with exactly one child by a
+// direct edge from its parent (or by promoting the child to root, if the
+// unary is itself the root).  The child's edge_length absorbs the unary's
+// edge_length so the leaf-to-root distance is preserved.
+//-----------------------------------------------------------------------------
+
+function collapse_unaries($t)
+{
+	$unaries = array();
+	$it = new NodeIterator($t->GetRoot());
+	$q  = $it->Begin();
+	while ($q != null)
+	{
+		if (!$q->IsLeaf() && count($q->GetChildren()) == 1)
+		{
+			$unaries[] = $q;
+		}
+		$q = $it->Next();
+	}
+
+	foreach ($unaries as $u)
+	{
+		collapse_unary($t, $u);
+	}
+}
+
+function collapse_unary($t, $u)
+{
+	$child  = $u->GetChild();
+	if ($child === null) { return; }
+	$parent = $u->GetAncestor();
+
+	$combined = (float) $u->GetAttribute('edge_length')
+	          + (float) $child->GetAttribute('edge_length');
+	$child->SetAttribute('edge_length', $combined);
+
+	if ($parent === null)
+	{
+		// U is the root — promote child.
+		$t->SetRoot($child);
+		$child->SetAncestor(null);
+		$child->SetSibling(null);
+	}
+	else
+	{
+		// Splice child into parent's child list in place of U.
+		$first = $parent->GetChild();
+		if ($first === $u)
+		{
+			$parent->SetChild($child);
+		}
+		else
+		{
+			$p = $first;
+			while ($p->GetSibling() !== null && $p->GetSibling() !== $u)
+			{
+				$p = $p->GetSibling();
+			}
+			if ($p->GetSibling() === $u)
+			{
+				$p->SetSibling($child);
+			}
+		}
+		$child->SetAncestor($parent);
+		$child->SetSibling($u->GetSibling());
+	}
+}
+
+//-----------------------------------------------------------------------------
+// Renumber every reachable node 0..N-1 in preorder.  Needed after
+// auto_binarise (adds nodes) + collapse_unaries (orphans nodes) so the
+// parallel-array data model has a contiguous id space.  Preorder = root gets
+// id 0, which the rest of the pipeline depends on.
+//-----------------------------------------------------------------------------
+
+function renumber($t)
+{
+	$new_map      = array();
+	$next_id      = 0;
+	$count_leaves = 0;
+
+	$it = new PreorderIterator($t->GetRoot());
+	$q  = $it->Begin();
+	while ($q != null)
+	{
+		$q->id              = $next_id;
+		$new_map[$next_id]  = $q;
+		if ($q->IsLeaf()) { $count_leaves++; }
+		$next_id++;
+		$q = $it->Next();
+	}
+
+	$t->id_to_node_map = $new_map;
+	$t->num_nodes      = $next_id;
+	$t->num_leaves     = $count_leaves;
+}
+
+//-----------------------------------------------------------------------------
+// Auto-binarise: resolve any multifurcation by inserting a right-leaning
+// chain of blank-label, zero-edge-length internal nodes.  A node with k > 2
+// children [c1, c2, c3, c4] becomes:
+//
+//     c1 ─── (new) ─── c2
+//              │
+//              └────── (new) ─── c3
+//                         │
+//                         └───── c4
+//
+// New internals sit at the same x as their parent (edge_length 0), so the
+// extra structure is visually compact.
+//-----------------------------------------------------------------------------
+
+function auto_binarise($t)
+{
+	// Snapshot all multifurcating nodes first.  Iterating while we restructure
+	// would be awkward — new nodes get added behind us.
+	$multifurcating = array();
+	$it = new NodeIterator($t->GetRoot());
+	$q  = $it->Begin();
+	while ($q != null)
+	{
+		if (count($q->GetChildren()) > 2)
+		{
+			$multifurcating[] = $q;
+		}
+		$q = $it->Next();
+	}
+
+	foreach ($multifurcating as $node)
+	{
+		binarise_node($t, $node);
+	}
+}
+
+function binarise_node($t, $node)
+{
+	$children = $node->GetChildren();
+	if (count($children) <= 2) { return; }
+
+	$first = $children[0];
+	$rest  = array_slice($children, 1);
+	$chain = build_chain($t, $rest);
+
+	// $node now has exactly two children: $first and the chain.
+	$first->SetSibling($chain);
+	$chain->SetSibling(null);
+	$chain->SetAncestor($node);
+}
+
+// Wrap the given children in a binary tree of new internal nodes; return
+// the root.  Each new internal has blank label and zero edge_length.
+function build_chain($t, $children)
+{
+	$k = count($children);
+
+	if ($k == 2)
+	{
+		$a = $children[0];
+		$b = $children[1];
+		$p = $t->NewNode('');
+		$p->SetAttribute('edge_length', 0);
+		$p->SetChild($a);
+		$a->SetSibling($b);
+		$b->SetSibling(null);
+		$a->SetAncestor($p);
+		$b->SetAncestor($p);
+		return $p;
+	}
+
+	// k >= 3: first child + sub-chain of the rest
+	$first = $children[0];
+	$rest  = array_slice($children, 1);
+	$sub   = build_chain($t, $rest);
+
+	$p = $t->NewNode('');
+	$p->SetAttribute('edge_length', 0);
+	$p->SetChild($first);
+	$first->SetSibling($sub);
+	$sub->SetSibling(null);
+	$first->SetAncestor($p);
+	$sub->SetAncestor($p);
+	return $p;
+}
+
+//-----------------------------------------------------------------------------
+// Reject multifurcations.  Kept as a safety net after auto_binarise().
 //-----------------------------------------------------------------------------
 
 function require_binary($t)
@@ -283,7 +468,10 @@ function build_arrays($t, $order_to_node, $crossings_by_order)
 function build_v1_json($newick)
 {
 	$t = parse_newick($newick);
-	require_binary($t);
+	collapse_unaries($t);   // first — removes degenerate unary internals
+	auto_binarise($t);      // then — splits any remaining multifurcations
+	renumber($t);           // contiguous ids 0..N-1, root = 0
+	require_binary($t);     // safety net
 
 	cladogram_to_branch_lengths($t);  // no-op if branch lengths already present
 
