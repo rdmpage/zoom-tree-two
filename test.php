@@ -301,6 +301,49 @@ ok($found_aa_id >= 0,                     'label round-trip: Aa internal label i
 eq($j4['bootstrap'][$found_aa_id], '95',  'label round-trip: bootstrap=95 still on that node');
 
 //-----------------------------------------------------------------------------
+// label.php --from-tsv: TSV reader, expansion, monophyly-based labelling.
+//-----------------------------------------------------------------------------
+
+$tsv_content = "taxon\tmembers\n" .
+               "Fooidae\tAa,Bb\n" .
+               "OrderX\tFooidae,Cc\n" .
+               "\n" .                          // blank lines are ignored
+               "BarFam\tDd\n";
+
+$taxa = parse_tsv_string($tsv_content);
+eq(count($taxa),       3,                            'tsv parse: 3 data rows (header + blank skipped)');
+eq($taxa['Fooidae'],   array('Aa', 'Bb'),            'tsv parse: Fooidae members');
+eq($taxa['OrderX'],    array('Fooidae', 'Cc'),       'tsv parse: OrderX members (forward ref to Fooidae)');
+eq($taxa['BarFam'],    array('Dd'),                  'tsv parse: BarFam members');
+ok(!isset($taxa['taxon']),                           'tsv parse: header row skipped');
+
+// expand_to_leaves: OrderX -> Fooidae -> {Aa, Bb}, plus Cc -> {Aa, Bb, Cc}.
+$cache = array();
+$leaves = expand_to_leaves('OrderX', $taxa, $cache);
+sort($leaves);
+eq($leaves, array('Aa', 'Bb', 'Cc'), 'tsv expand: OrderX resolves to Aa, Bb, Cc');
+
+// "Unknown" taxon: treated as leaf-level key, returns itself.
+$leaves2 = expand_to_leaves('NotInTsv', $taxa, $cache);
+eq($leaves2, array('NotInTsv'), 'tsv expand: unknown taxon treated as leaf key');
+
+// End-to-end: small Newick + TSV -> Fooidae and OrderX both labelled.
+$nwk_tsv = "(((Aa_x:1,Aa_y:1):1,(Bb_p:1,Bb_q:1):1):1,Cc_v:1);";
+$t_tsv   = parse_newick(strip_newick_comments($nwk_tsv));
+$s_tsv   = infer_tsv_labels($t_tsv, $taxa, ' ');
+
+eq($s_tsv['labelled'],         2, 'tsv infer: 2 taxa labelled');
+eq($s_tsv['not_monophyletic'], 0, 'tsv infer: 0 not-monophyletic');
+eq($s_tsv['pre_labelled'],     0, 'tsv infer: 0 pre-labelled');
+
+$labels_tsv = internal_labels_in_tree($t_tsv);
+sort($labels_tsv);
+eq($labels_tsv, array('Fooidae', 'OrderX'), 'tsv infer: Fooidae and OrderX applied');
+
+// "BarFam" has zero leaves in the tree -> unmatched.
+ok($s_tsv['unmatched'] >= 1, 'tsv infer: BarFam (no leaves) counted as unmatched');
+
+//-----------------------------------------------------------------------------
 
 echo "\n$PASS passed, $FAIL failed\n";
 exit($FAIL > 0 ? 1 : 0);

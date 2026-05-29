@@ -1,16 +1,23 @@
 <?php
 
-// label.php — infer internal-node labels from leaf-name patterns.
+// label.php — infer internal-node labels.  Two modes:
 //
-//   php label.php [--separator=SEP] input.tre   > out.tre
-//   cat input.tre | php label.php [--separator=SEP]
+//   php label.php [--separator=SEP] input.tre              > out.tre   (auto)
+//   php label.php --from-tsv=defs.tsv [--separator=SEP] input.tre > out.tre
 //
-// Each leaf label is split by --separator (default " ") and the first token
-// is used as a "group key" — typically the genus when leaves are
-// `Genus species`.  For every group with >= 2 members, the LCA is found and
-// the clade checked for monophyly (its subtree contains exactly those
-// leaves).  If monophyletic AND the LCA is not already labelled, we set its
-// label to the group key.
+// auto      Group every leaf by the first --separator-delimited token of
+//           its label (default separator " ").  For each group with >= 2
+//           members, find the LCA and label it with the group key if the
+//           clade is monophyletic (subtree contains exactly those leaves)
+//           and the LCA isn't already labelled.
+//
+// --from-tsv=PATH   Read a `taxon\tmembers` TSV (header row required:
+//           `taxon\tmembers`).  Members are comma-separated; each member is
+//           either a genus (matches the leaf-key in the tree) or another
+//           taxon defined elsewhere in the TSV.  Forward references work —
+//           we read the whole file before resolving.  For each taxon,
+//           recursively expand members to a leaf-level key set, find the
+//           leaves matching, then run the same LCA + monophyly + label step.
 //
 // Output is Newick to stdout.  Any [&bootstrap=…] metacomments on the input
 // survive the round trip (label appears before the bracket).
@@ -24,6 +31,7 @@ require_once __DIR__ . '/rewrite.php';   // emit_newick, format_label, strip_new
 function label_main($argv)
 {
 	$separator = ' ';
+	$tsv_path  = null;
 	$input     = null;
 
 	for ($i = 1; $i < count($argv); $i++)
@@ -33,9 +41,13 @@ function label_main($argv)
 		{
 			$separator = $m[1];
 		}
+		else if (preg_match('/^--from-tsv=(.+)$/', $a, $m))
+		{
+			$tsv_path = $m[1];
+		}
 		else if ($a === '-h' || $a === '--help')
 		{
-			fwrite(STDERR, file_get_contents(__FILE__, false, null, 0, 1200));
+			fwrite(STDERR, file_get_contents(__FILE__, false, null, 0, 1800));
 			exit(0);
 		}
 		else if ($a !== '' && $a[0] === '-')
@@ -63,7 +75,29 @@ function label_main($argv)
 		}
 	}
 
-	echo label_newick($newick, $separator) . "\n";
+	$newick = strip_newick_comments($newick);
+	$t = parse_newick($newick);
+
+	if ($tsv_path !== null)
+	{
+		$taxa  = read_tsv($tsv_path);
+		$stats = infer_tsv_labels($t, $taxa, $separator);
+		fwrite(STDERR, sprintf(
+			"label.php (tsv, %s, %d taxa): labelled=%d, skipped (unmatched=%d, not_monophyletic=%d, already_labelled=%d)\n",
+			$tsv_path, count($taxa),
+			$stats['labelled'], $stats['unmatched'], $stats['not_monophyletic'], $stats['pre_labelled']
+		));
+	}
+	else
+	{
+		$stats = infer_group_labels($t, $separator);
+		fwrite(STDERR, sprintf(
+			"label.php (auto): labelled=%d, skipped (singletons=%d, not_monophyletic=%d, already_labelled=%d)\n",
+			$stats['labelled'], $stats['singletons'], $stats['not_monophyletic'], $stats['pre_labelled']
+		));
+	}
+
+	echo emit_newick($t->GetRoot()) . ";\n";
 }
 
 //-----------------------------------------------------------------------------
@@ -156,6 +190,171 @@ function infer_group_labels($t, $separator)
 
 	return $stats;
 }
+
+//-----------------------------------------------------------------------------
+// TSV-driven mode
+//-----------------------------------------------------------------------------
+
+function read_tsv($path)
+{
+	$content = @file_get_contents($path);
+	if ($content === false)
+	{
+		fwrite(STDERR, "label.php: cannot read tsv $path\n");
+		exit(1);
+	}
+	return parse_tsv_string($content);
+}
+
+// Returns an associative array taxon => [member1, member2, ...].  A header
+// row of "taxon\tmembers" (case-insensitive) is skipped if present.  Lines
+// without a tab are ignored.
+function parse_tsv_string($content)
+{
+	$taxa = array();
+	$lines = preg_split('/\r?\n/', $content);
+	$saw_header = false;
+
+	foreach ($lines as $line)
+	{
+		$line = rtrim($line);
+		if ($line === '') { continue; }
+
+		$parts = explode("\t", $line, 2);
+		if (count($parts) < 2) { continue; }
+
+		$taxon = trim($parts[0]);
+
+		if (!$saw_header && strtolower($taxon) === 'taxon' && strtolower(trim($parts[1])) === 'members')
+		{
+			$saw_header = true;
+			continue;
+		}
+
+		$members = array_values(array_filter(
+			array_map('trim', explode(',', $parts[1])),
+			'strlen'
+		));
+
+		if ($taxon !== '')
+		{
+			$taxa[$taxon] = $members;
+		}
+	}
+
+	return $taxa;
+}
+
+// Recursively expand a taxon to the set of leaf-level keys (typically
+// genera).  A member that has no row in $taxa is treated as a leaf-level
+// key — the genus name we expect to find in the tree.  Caches results per
+// taxon so deep hierarchies stay O(N).
+function expand_to_leaves($taxon, $taxa, &$cache)
+{
+	if (isset($cache[$taxon]))
+	{
+		return $cache[$taxon];
+	}
+	if (!isset($taxa[$taxon]))
+	{
+		$cache[$taxon] = array($taxon);
+		return $cache[$taxon];
+	}
+
+	$cache[$taxon] = array();   // tentative — guards against cycles
+	$out = array();
+	foreach ($taxa[$taxon] as $member)
+	{
+		foreach (expand_to_leaves($member, $taxa, $cache) as $k)
+		{
+			$out[] = $k;
+		}
+	}
+	$cache[$taxon] = array_values(array_unique($out));
+	return $cache[$taxon];
+}
+
+function infer_tsv_labels($t, $taxa, $separator)
+{
+	$t->BuildWeights($t->GetRoot());
+
+	// Index leaves by their first-token key (genus, typically).
+	$leaves_by_key = array();
+	$it = new NodeIterator($t->GetRoot());
+	$q  = $it->Begin();
+	while ($q != null)
+	{
+		if ($q->IsLeaf())
+		{
+			$label = $q->GetLabel();
+			if ($label !== '' && $label !== null)
+			{
+				$leaves_by_key[first_token($label, $separator)][] = $q;
+			}
+		}
+		$q = $it->Next();
+	}
+
+	$stats = array(
+		'labelled'         => 0,
+		'unmatched'        => 0,
+		'not_monophyletic' => 0,
+		'pre_labelled'     => 0,
+	);
+
+	$cache = array();
+	foreach ($taxa as $taxon => $_)
+	{
+		$keys = expand_to_leaves($taxon, $taxa, $cache);
+
+		$members = array();
+		foreach ($keys as $k)
+		{
+			if (isset($leaves_by_key[$k]))
+			{
+				foreach ($leaves_by_key[$k] as $leaf)
+				{
+					$members[] = $leaf;
+				}
+			}
+		}
+
+		if (count($members) < 2)
+		{
+			$stats['unmatched']++;
+			continue;
+		}
+
+		$lca = compute_lca($members);
+		if ($lca === null)
+		{
+			continue;
+		}
+
+		$subtree_size = (int) $lca->GetAttribute('weight');
+		if ($subtree_size !== count($members))
+		{
+			$stats['not_monophyletic']++;
+			continue;
+		}
+
+		$existing = $lca->GetLabel();
+		if ($existing !== '' && $existing !== null)
+		{
+			$stats['pre_labelled']++;
+			continue;
+		}
+
+		$lca->SetLabel($taxon);
+		$stats['labelled']++;
+	}
+
+	return $stats;
+}
+
+//-----------------------------------------------------------------------------
+// Shared helpers
+//-----------------------------------------------------------------------------
 
 function first_token($s, $separator)
 {
