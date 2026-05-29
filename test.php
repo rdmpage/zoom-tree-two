@@ -168,6 +168,23 @@ sort($leaf_labels);
 eq($leaf_labels, array('a','b','c','d','e','f','g','h'), 'balanced-8: leaf labels == a..h');
 
 //-----------------------------------------------------------------------------
+// Comment-stripping: same logical tree with/without [...] annotations must
+// build to the same JSON.
+//-----------------------------------------------------------------------------
+
+$annotated =
+	"(((a[ignore]:1,b:1)[clade1]:1,(c[boot 99]:1,d:1)[nested[inside]]:1):1," .
+	"((e:1,f:1)[node_x]:1,(g:1,h:1):1)[clade2]:1)[root];\n";
+$treeA = build_v1_json($annotated);
+
+eq($treeA['n'],          $tree['n'],          'comments stripped: same n');
+eq($treeA['labels'],     $tree['labels'],     'comments stripped: same labels');
+eq($treeA['parent'],     $tree['parent'],     'comments stripped: same parent');
+eq($treeA['inorder'],    $tree['inorder'],    'comments stripped: same inorder');
+eq($treeA['first_zoom'], $tree['first_zoom'], 'comments stripped: same first_zoom');
+eq($treeA['id'],         $tree['id'],         'comments stripped: same id (hash of stripped Newick)');
+
+//-----------------------------------------------------------------------------
 
 echo "\n$PASS passed, $FAIL failed\n";
 exit($FAIL > 0 ? 1 : 0);

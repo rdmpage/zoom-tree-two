@@ -222,6 +222,69 @@ function build_chain($t, $children)
 }
 
 //-----------------------------------------------------------------------------
+// Strip Newick comments: `[...]` blocks may appear anywhere whitespace is
+// allowed (Newick 8:45).  PAUP nests them, so we count depth.  Brackets
+// inside single-quoted labels are part of the label and kept verbatim.
+// Doubled quotes `''` inside a quoted label are the escape for a single
+// quote — they don't end the quoted span.
+//-----------------------------------------------------------------------------
+
+function strip_newick_comments($newick)
+{
+	$out   = '';
+	$depth = 0;
+	$in_q  = false;
+	$n     = strlen($newick);
+
+	for ($i = 0; $i < $n; $i++)
+	{
+		$c = $newick[$i];
+
+		if ($in_q)
+		{
+			$out .= $c;
+			if ($c === "'")
+			{
+				if ($i + 1 < $n && $newick[$i + 1] === "'")
+				{
+					$out .= "'";
+					$i++;
+					continue;
+				}
+				$in_q = false;
+			}
+			continue;
+		}
+
+		if ($c === "'")
+		{
+			$in_q = true;
+			$out .= $c;
+			continue;
+		}
+
+		if ($c === '[')
+		{
+			$depth++;
+			continue;
+		}
+
+		if ($c === ']')
+		{
+			if ($depth > 0) { $depth--; }
+			continue;
+		}
+
+		if ($depth === 0)
+		{
+			$out .= $c;
+		}
+	}
+
+	return $out;
+}
+
+//-----------------------------------------------------------------------------
 // Reject multifurcations.  Kept as a safety net after auto_binarise().
 //-----------------------------------------------------------------------------
 
@@ -467,6 +530,7 @@ function build_arrays($t, $order_to_node, $crossings_by_order)
 
 function build_v1_json($newick)
 {
+	$newick = strip_newick_comments($newick);  // [...] anywhere whitespace is allowed
 	$t = parse_newick($newick);
 	collapse_unaries($t);   // first — removes degenerate unary internals
 	auto_binarise($t);      // then — splits any remaining multifurcations
