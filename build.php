@@ -276,78 +276,91 @@ function build_arrays($t, $order_to_node, $crossings_by_order)
 }
 
 //-----------------------------------------------------------------------------
-// Main
+// Pure builder — Newick string in, data-model array out.  Used by both the
+// CLI main below and by test.php.
 //-----------------------------------------------------------------------------
 
-$newick = read_newick($argv);
-if (trim($newick) === '')
+function build_v1_json($newick)
 {
-	fwrite(STDERR, "build.php: no input\n");
-	exit(1);
+	$t = parse_newick($newick);
+	require_binary($t);
+
+	cladogram_to_branch_lengths($t);  // no-op if branch lengths already present
+
+	$t->BuildWeights($t->GetRoot());
+	$o = new RightOrder($t);
+	$o->Order();
+
+	$order_to_node = array();
+	get_inorder($t, $order_to_node);
+
+	$spans              = compute_spans($order_to_node);
+	$crossings_by_order = compute_crossings($order_to_node, $spans);
+
+	$tree_width = 1000;
+	get_node_heights($t, $tree_width);
+	get_max_subtree_height($t);
+
+	// get_node_heights treats the root's own edge_length as a left-margin offset,
+	// which puts x[root] > 0 when the Newick has a leading branch length.  The
+	// data model wants the root at x=0; force it.
+	$root_xy = $t->GetRoot()->GetAttribute('xy');
+	$root_xy['x'] = 0;
+	$t->GetRoot()->SetAttribute('xy', $root_xy);
+
+	$initial_size = 9;
+	list($first_zoom, $zoom_levels) = compute_first_zoom($t, $initial_size);
+
+	list($labels, $parent, $x, $max_x, $style, $inorder, $child_l, $child_r, $crossings)
+		= build_arrays($t, $order_to_node, $crossings_by_order);
+
+	$id_str = substr(hash('sha256', $newick), 0, 12);
+
+	return array(
+		'id' => $id_str,
+		'config' => array(
+			'tree_width'        => $tree_width,
+			'row_height_open'   => 12,
+			'row_height_closed' => 24,
+			'min_zoom'          => 1,
+			'max_zoom'          => $zoom_levels,
+			'initial_size'      => $initial_size,
+		),
+		'n'          => $t->num_nodes,
+		'labels'     => $labels,
+		'parent'     => $parent,
+		'x'          => $x,
+		'max_x'      => $max_x,
+		'first_zoom' => $first_zoom,
+		'style'      => $style,
+		'inorder'    => $inorder,
+		'child_l'    => $child_l,
+		'child_r'    => $child_r,
+		'crossings'  => $crossings,
+	);
 }
 
-$t = parse_newick($newick);
-require_binary($t);
+//-----------------------------------------------------------------------------
+// CLI main — runs only when invoked as a script (not when test.php includes us).
+//-----------------------------------------------------------------------------
 
-cladogram_to_branch_lengths($t);  // no-op if branch lengths already present
-
-$t->BuildWeights($t->GetRoot());
-$o = new RightOrder($t);
-$o->Order();
-
-$order_to_node = array();
-get_inorder($t, $order_to_node);
-
-$spans              = compute_spans($order_to_node);
-$crossings_by_order = compute_crossings($order_to_node, $spans);
-
-$tree_width = 1000;
-get_node_heights($t, $tree_width);
-get_max_subtree_height($t);
-
-// get_node_heights treats the root's own edge_length as a left-margin offset,
-// which puts x[root] > 0 when the Newick has a leading branch length.  The
-// data model wants the root at x=0; force it.
-$root_xy = $t->GetRoot()->GetAttribute('xy');
-$root_xy['x'] = 0;
-$t->GetRoot()->SetAttribute('xy', $root_xy);
-
-$initial_size = 9;
-list($first_zoom, $zoom_levels) = compute_first_zoom($t, $initial_size);
-
-list($labels, $parent, $x, $max_x, $style, $inorder, $child_l, $child_r, $crossings)
-	= build_arrays($t, $order_to_node, $crossings_by_order);
-
-$id_str = substr(hash('sha256', $newick), 0, 12);
-
-$out = array(
-	'id' => $id_str,
-	'config' => array(
-		'tree_width'        => $tree_width,
-		'row_height_open'   => 12,
-		'row_height_closed' => 24,
-		'min_zoom'          => 1,
-		'max_zoom'          => $zoom_levels,
-		'initial_size'      => $initial_size,
-	),
-	'n'          => $t->num_nodes,
-	'labels'     => $labels,
-	'parent'     => $parent,
-	'x'          => $x,
-	'max_x'      => $max_x,
-	'first_zoom' => $first_zoom,
-	'style'      => $style,
-	'inorder'    => $inorder,
-	'child_l'    => $child_l,
-	'child_r'    => $child_r,
-	'crossings'  => $crossings,
-);
-
-$out_dir = __DIR__ . '/trees';
-if (!is_dir($out_dir))
+if (PHP_SAPI === 'cli' && realpath($_SERVER['SCRIPT_FILENAME']) === __FILE__)
 {
-	mkdir($out_dir, 0755, true);
+	$newick = read_newick($argv);
+	if (trim($newick) === '')
+	{
+		fwrite(STDERR, "build.php: no input\n");
+		exit(1);
+	}
+
+	$out = build_v1_json($newick);
+
+	$out_dir = __DIR__ . '/trees';
+	if (!is_dir($out_dir))
+	{
+		mkdir($out_dir, 0755, true);
+	}
+	$out_path = $out_dir . '/' . $out['id'] . '.json';
+	file_put_contents($out_path, json_encode($out));
+	fprintf(STDERR, "wrote %s  (n=%d, zoom_levels=%d)\n", $out_path, $out['n'], $out['config']['max_zoom']);
 }
-$out_path = $out_dir . '/' . $id_str . '.json';
-file_put_contents($out_path, json_encode($out));
-fprintf(STDERR, "wrote %s  (n=%d, zoom_levels=%d)\n", $out_path, $t->num_nodes, $zoom_levels);

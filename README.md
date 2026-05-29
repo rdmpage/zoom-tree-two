@@ -28,6 +28,18 @@ php build.php test-data/gekkota.tre
 Tree id = first 12 hex chars of `sha256(newick)`. Identical inputs reuse the
 same file.
 
+## Running tests
+
+```
+php test.php   # exit 0 = green
+```
+
+Builds the 8-leaf tree in-memory via `build_v1_json()` and asserts structural
+invariants (array lengths, root parent/x/style/first_zoom, inorder is a true
+permutation, binary structure with parent↔child consistency, style by side,
+no orphan internals, x/max_x in `[0, tree_width]`, well-formed crossings).
+Plain PHP, no PHPUnit.
+
 ## Viewing
 
 Served by Apache at `http://localhost/zoom-tree-two/viewer.html?id=<id>`.
