@@ -14,7 +14,7 @@ require_once __DIR__ . '/src/php/inorder_iterator.php';
 require_once __DIR__ . '/src/php/tree-parse.php';
 require_once __DIR__ . '/src/php/tree-order.php';
 require_once __DIR__ . '/src/php/utils.php';
-require_once __DIR__ . '/src/php/fake_priority_queue.php';
+require_once __DIR__ . '/src/php/pq.php';
 
 //-----------------------------------------------------------------------------
 // I/O
@@ -154,17 +154,23 @@ function compute_first_zoom($t, $initial_size)
 		$count++;
 	}
 
-	$queue = array();
-	add_children_to_queue($queue, $root);
+	$queue = new PQ();
+	foreach (get_children($root) as $c)
+	{
+		if (!$c->IsLeaf())
+		{
+			$queue->en_queue($c->GetId(), $c->GetLabel(), score_node($c));
+		}
+	}
 
 	for ($z = 1; $z <= $zoom_levels; $z++)
 	{
 		$k_target = pow($ZOOM_FACTOR, $z - 1) * $initial_size;
 
-		while (!empty($queue) && $count < $k_target)
+		while ($queue->valid() && $count < $k_target)
 		{
-			$obj = array_shift($queue);
-			$node = $obj->node;
+			$obj  = $queue->de_queue();
+			$node = $t->id_to_node_map[$obj->id];
 
 			foreach (get_children($node) as $child)
 			{
@@ -175,9 +181,11 @@ function compute_first_zoom($t, $initial_size)
 					$in_subtree[$cid] = true;
 					$count++;
 				}
+				if (!$child->IsLeaf())
+				{
+					$queue->en_queue($cid, $child->GetLabel(), score_node($child));
+				}
 			}
-
-			add_children_to_queue($queue, $node);
 		}
 	}
 
