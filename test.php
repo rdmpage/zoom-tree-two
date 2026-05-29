@@ -343,6 +343,31 @@ eq($labels_tsv, array('Fooidae', 'OrderX'), 'tsv infer: Fooidae and OrderX appli
 // "BarFam" has zero leaves in the tree -> unmatched.
 ok($s_tsv['unmatched'] >= 1, 'tsv infer: BarFam (no leaves) counted as unmatched');
 
+// Loose vs strict: a clade with an *unclassified* extra leaf is labelled in
+// loose mode (default) but rejected by strict mode.  Here Zz_q is not in
+// any TSV taxon — it's tolerated.
+$tsv_loose      = parse_tsv_string("taxon\tmembers\nFooidae\tAa,Bb\n");
+$nwk_unclass    = "(((Aa_x:1,Aa_y:1):1,(Bb_p:1,Zz_q:1):1):1,Cc_v:1);";
+$t_loose        = parse_newick(strip_newick_comments($nwk_unclass));
+$s_loose        = infer_tsv_labels($t_loose, $tsv_loose, ' ', false);
+eq($s_loose['labelled'],         1, 'tsv loose: Fooidae labelled despite unclassified Zz_q in subtree');
+eq($s_loose['not_monophyletic'], 0, 'tsv loose: 0 not_monophyletic');
+
+$t_strict = parse_newick(strip_newick_comments($nwk_unclass));
+$s_strict = infer_tsv_labels($t_strict, $tsv_loose, ' ', true);
+eq($s_strict['labelled'],         0, 'tsv strict: Fooidae rejected (subtree size != member count)');
+eq($s_strict['not_monophyletic'], 1, 'tsv strict: 1 not_monophyletic');
+
+// Even in loose mode, a *competing* TSV taxon's leaf in the subtree blocks
+// the label.  Here Cc is defined under BarFam but lives inside Fooidae's
+// LCA, so Fooidae is genuinely paraphyletic.
+$tsv_conflict = parse_tsv_string("taxon\tmembers\nFooidae\tAa,Bb\nBarFam\tCc\n");
+$nwk_conflict = "(((Aa_x:1,Cc_v:1):1,Bb_p:1):1,Dd_q:1);";
+$t_conflict   = parse_newick(strip_newick_comments($nwk_conflict));
+$s_conflict   = infer_tsv_labels($t_conflict, $tsv_conflict, ' ', false);
+eq($s_conflict['labelled'],         0, 'tsv loose: Fooidae rejected — Cc (BarFam member) is inside the subtree');
+eq($s_conflict['not_monophyletic'], 1, 'tsv loose: 1 not_monophyletic from real paraphyly');
+
 //-----------------------------------------------------------------------------
 
 echo "\n$PASS passed, $FAIL failed\n";

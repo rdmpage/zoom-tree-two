@@ -17,7 +17,14 @@
 //           taxon defined elsewhere in the TSV.  Forward references work —
 //           we read the whole file before resolving.  For each taxon,
 //           recursively expand members to a leaf-level key set, find the
-//           leaves matching, then run the same LCA + monophyly + label step.
+//           leaves matching, then run an LCA + monophyly + label step.
+//
+//           Default monophyly check is LOOSE: the LCA is accepted if no
+//           leaf in its subtree belongs to a *different* TSV taxon.
+//           Unclassified leaves (not in any TSV row) are tolerated, so a
+//           clade can still be labelled even when the TSV is missing some
+//           recently-described genera.  Add --strict to require exact
+//           subtree-size == matched-member-count instead.
 //
 // Output is Newick to stdout.  Any [&bootstrap=…] metacomments on the input
 // survive the round trip (label appears before the bracket).
@@ -32,6 +39,7 @@ function label_main($argv)
 {
 	$separator = ' ';
 	$tsv_path  = null;
+	$strict    = false;
 	$input     = null;
 
 	for ($i = 1; $i < count($argv); $i++)
@@ -44,6 +52,10 @@ function label_main($argv)
 		else if (preg_match('/^--from-tsv=(.+)$/', $a, $m))
 		{
 			$tsv_path = $m[1];
+		}
+		else if ($a === '--strict')
+		{
+			$strict = true;
 		}
 		else if ($a === '-h' || $a === '--help')
 		{
@@ -81,9 +93,10 @@ function label_main($argv)
 	if ($tsv_path !== null)
 	{
 		$taxa  = read_tsv($tsv_path);
-		$stats = infer_tsv_labels($t, $taxa, $separator);
+		$stats = infer_tsv_labels($t, $taxa, $separator, $strict);
 		fwrite(STDERR, sprintf(
-			"label.php (tsv, %s, %d taxa): labelled=%d, skipped (unmatched=%d, not_monophyletic=%d, already_labelled=%d)\n",
+			"label.php (tsv %s, %s, %d taxa): labelled=%d, skipped (unmatched=%d, not_monophyletic=%d, already_labelled=%d)\n",
+			$strict ? 'strict' : 'loose',
 			$tsv_path, count($taxa),
 			$stats['labelled'], $stats['unmatched'], $stats['not_monophyletic'], $stats['pre_labelled']
 		));
@@ -274,7 +287,7 @@ function expand_to_leaves($taxon, $taxa, &$cache)
 	return $cache[$taxon];
 }
 
-function infer_tsv_labels($t, $taxa, $separator)
+function infer_tsv_labels($t, $taxa, $separator, $strict = false)
 {
 	$t->BuildWeights($t->GetRoot());
 
@@ -303,9 +316,26 @@ function infer_tsv_labels($t, $taxa, $separator)
 	);
 
 	$cache = array();
+
+	// Loose mode: union of every key defined in any TSV taxon.  A leaf whose
+	// key is in `$known` belongs to some classification; a leaf whose key is
+	// absent from `$known` is "unclassified" and tolerated.
+	$known = array();
+	if (!$strict)
+	{
+		foreach ($taxa as $taxon => $_)
+		{
+			foreach (expand_to_leaves($taxon, $taxa, $cache) as $k)
+			{
+				$known[$k] = true;
+			}
+		}
+	}
+
 	foreach ($taxa as $taxon => $_)
 	{
-		$keys = expand_to_leaves($taxon, $taxa, $cache);
+		$keys    = expand_to_leaves($taxon, $taxa, $cache);
+		$key_set = array_flip($keys);
 
 		$members = array();
 		foreach ($keys as $k)
@@ -331,11 +361,22 @@ function infer_tsv_labels($t, $taxa, $separator)
 			continue;
 		}
 
-		$subtree_size = (int) $lca->GetAttribute('weight');
-		if ($subtree_size !== count($members))
+		if ($strict)
 		{
-			$stats['not_monophyletic']++;
-			continue;
+			$subtree_size = (int) $lca->GetAttribute('weight');
+			if ($subtree_size !== count($members))
+			{
+				$stats['not_monophyletic']++;
+				continue;
+			}
+		}
+		else
+		{
+			if (count_conflicting_leaves($lca, $key_set, $known, $separator) > 0)
+			{
+				$stats['not_monophyletic']++;
+				continue;
+			}
 		}
 
 		$existing = $lca->GetLabel();
@@ -350,6 +391,41 @@ function infer_tsv_labels($t, $taxa, $separator)
 	}
 
 	return $stats;
+}
+
+// Number of leaves in $node's subtree whose key is in $known_keys but not in
+// $own_keys.  Zero means "no leaf belonging to a different TSV taxon" —
+// i.e. loose-monophyletic.
+function count_conflicting_leaves($node, $own_keys, $known_keys, $separator)
+{
+	$count = 0;
+	$stack = array($node);
+	while (!empty($stack))
+	{
+		$n = array_pop($stack);
+		if ($n->IsLeaf())
+		{
+			$label = $n->GetLabel();
+			if ($label !== '' && $label !== null)
+			{
+				$key = first_token($label, $separator);
+				if (isset($known_keys[$key]) && !isset($own_keys[$key]))
+				{
+					$count++;
+				}
+			}
+		}
+		else
+		{
+			$c = $n->GetChild();
+			while ($c !== null)
+			{
+				$stack[] = $c;
+				$c = $c->GetSibling();
+			}
+		}
+	}
+	return $count;
 }
 
 //-----------------------------------------------------------------------------
