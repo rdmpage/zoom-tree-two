@@ -233,20 +233,22 @@ function emit_newick($node)
 	return $s;
 }
 
-// Newick labels: unquoted labels must be drawn from a restricted character
-// set.  We reverse the read-time `_` -> ` ` conversion (spaces back to
-// underscores), and quote anything else that needs it.
+// Newick 8:45: unquoted labels may NOT contain whitespace or any of
+// `()[]':;,`.  Everything else (pipes, slashes, dots, plus, dashes, …) is
+// fine unquoted.  We reverse the read-time `_` -> ` ` conversion (spaces
+// back to underscores), and only fall back to single-quoting when the label
+// still contains a forbidden character.
 function format_label($label)
 {
-	$safe = '/^[A-Za-z0-9._\-]+$/';
+	$forbidden = '/[\s()\[\]\':;,]/';
 
-	if (preg_match($safe, $label))
+	if (!preg_match($forbidden, $label))
 	{
 		return $label;
 	}
 
 	$with_underscores = str_replace(' ', '_', $label);
-	if (preg_match($safe, $with_underscores))
+	if (!preg_match($forbidden, $with_underscores))
 	{
 		return $with_underscores;
 	}

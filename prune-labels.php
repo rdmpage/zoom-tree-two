@@ -2,19 +2,29 @@
 
 // prune-labels.php — keep only specified tokens of each leaf label.
 //
-//   php prune-labels.php --keep=N1,N2,... [--separator=SEP] input.tre > out.tre
-//   cat input.tre | php prune-labels.php --keep=2,3
+//   php prune-labels.php --keep=N1,N2,... [--separator=SEP] input.tre   > out.tre
+//   php prune-labels.php --keep-from=N    [--separator=SEP] input.tre   > out.tre
 //
-// For each leaf, split the label by --separator (default " ") and keep only
-// the 0-indexed token positions listed in --keep, joined back with the same
-// separator.  Internal-node labels and metacomments are untouched.
+// Two modes (pick one):
 //
-// Example.  treeoflife leaves like "Boraginales Boraginaceae Turricula
-// parryi ERR7621535" pruned with --keep=2,3 become "Turricula parryi".
+//   --keep=N1,N2,...   Keep the 0-indexed tokens at these positions
+//                      (joined by --separator).  treeoflife leaves like
+//                      "Boraginales Boraginaceae Turricula parryi
+//                      ERR7621535" with --keep=2,3 become "Turricula
+//                      parryi".
 //
-// If a leaf has fewer tokens than requested (e.g. an outgroup labelled just
-// "Foo" pruned with --keep=2,3), the original label is preserved rather
-// than replaced with an empty string.
+//   --keep-from=N      Start at token N, accumulate non-empty tokens until
+//                      one contains a pipe `|` (or the label ends).  Use
+//                      this for trees with variable-length species names
+//                      followed by a `id|haplo|locality` suffix —
+//                      "Genus burksi 2|1h|FL" -> "Genus burksi" AND
+//                      "Genus sp IT 1|1h|FL" -> "Genus sp IT".
+//
+// Internal-node labels and metacomments are untouched.  If a leaf has too
+// few tokens for the requested mode, the original label is preserved
+// rather than being replaced with an empty string.  Tokenisation uses
+// preg_split('/\s+/', trim(...)) so the `  ` from `__` in the source
+// folds into a single separator and doesn't shift token positions.
 
 require_once __DIR__ . '/rewrite.php';   // emit_newick, strip_newick_comments, ...
 
@@ -24,7 +34,7 @@ require_once __DIR__ . '/rewrite.php';   // emit_newick, strip_newick_comments, 
 
 function prune_main($argv)
 {
-	$keep_str  = null;
+	$keep_spec = null;
 	$separator = ' ';
 	$input     = null;
 
@@ -33,7 +43,17 @@ function prune_main($argv)
 		$a = $argv[$i];
 		if (preg_match('/^--keep=(.+)$/', $a, $m))
 		{
-			$keep_str = $m[1];
+			$indices = array();
+			foreach (explode(',', $m[1]) as $tok)
+			{
+				$tok = trim($tok);
+				if ($tok !== '' && ctype_digit($tok)) { $indices[] = (int) $tok; }
+			}
+			$keep_spec = $indices;
+		}
+		else if (preg_match('/^--keep-from=(\d+)$/', $a, $m))
+		{
+			$keep_spec = array('from' => (int) $m[1]);
 		}
 		else if (preg_match('/^--separator=(.*)$/', $a, $m))
 		{
@@ -41,7 +61,7 @@ function prune_main($argv)
 		}
 		else if ($a === '-h' || $a === '--help')
 		{
-			fwrite(STDERR, file_get_contents(__FILE__, false, null, 0, 1200));
+			fwrite(STDERR, file_get_contents(__FILE__, false, null, 0, 1600));
 			exit(0);
 		}
 		else if ($a !== '' && $a[0] === '-')
@@ -55,22 +75,9 @@ function prune_main($argv)
 		}
 	}
 
-	if ($keep_str === null)
+	if ($keep_spec === null || (is_array($keep_spec) && !isset($keep_spec['from']) && empty($keep_spec)))
 	{
-		fwrite(STDERR, "prune-labels.php: --keep=N1,N2,... is required\n");
-		exit(1);
-	}
-
-	$keep = array();
-	foreach (explode(',', $keep_str) as $tok)
-	{
-		$tok = trim($tok);
-		if ($tok === '' || !ctype_digit($tok)) { continue; }
-		$keep[] = (int) $tok;
-	}
-	if (empty($keep))
-	{
-		fwrite(STDERR, "prune-labels.php: --keep must contain at least one non-negative integer\n");
+		fwrite(STDERR, "prune-labels.php: --keep=N1,N2,... or --keep-from=N is required\n");
 		exit(1);
 	}
 
@@ -91,14 +98,21 @@ function prune_main($argv)
 	$newick = strip_newick_comments($newick);
 	$t = parse_newick($newick);
 
-	$count = prune_leaf_labels($t, $separator, $keep);
+	$count = prune_leaf_labels($t, $separator, $keep_spec);
 
 	fwrite(STDERR, sprintf(
-		"prune-labels.php: pruned %d leaf labels (kept tokens %s)\n",
-		$count, implode(',', $keep)
+		"prune-labels.php: pruned %d leaf labels (%s)\n",
+		$count, describe_keep_spec($keep_spec)
 	));
 
 	echo emit_newick($t->GetRoot()) . ";\n";
+}
+
+function describe_keep_spec($spec)
+{
+	if (is_array($spec) && isset($spec['from'])) { return 'keep-from=' . $spec['from']; }
+	if (is_array($spec))                          { return 'keep=' . implode(',', $spec); }
+	return '?';
 }
 
 //-----------------------------------------------------------------------------
@@ -106,7 +120,7 @@ function prune_main($argv)
 // number of labels actually changed.
 //-----------------------------------------------------------------------------
 
-function prune_leaf_labels($t, $separator, $keep)
+function prune_leaf_labels($t, $separator, $keep_spec)
 {
 	$count = 0;
 	$it = new NodeIterator($t->GetRoot());
@@ -118,15 +132,19 @@ function prune_leaf_labels($t, $separator, $keep)
 			$label = $q->GetLabel();
 			if ($label !== '' && $label !== null)
 			{
-				$parts = explode($separator, $label);
-				$kept = array();
-				foreach ($keep as $idx)
+				// Tokenise with whitespace collapse so the `  ` from `__`
+				// folds away and doesn't introduce empty slots.
+				if ($separator === ' ')
 				{
-					if ($idx >= 0 && $idx < count($parts))
-					{
-						$kept[] = $parts[$idx];
-					}
+					$parts = preg_split('/\s+/', trim($label));
 				}
+				else
+				{
+					$collapsed = preg_replace('/' . preg_quote($separator, '/') . '+/', $separator, trim($label));
+					$parts = explode($separator, $collapsed);
+				}
+
+				$kept = compute_kept($parts, $keep_spec);
 				if (!empty($kept))
 				{
 					$new_label = implode($separator, $kept);
@@ -141,6 +159,34 @@ function prune_leaf_labels($t, $separator, $keep)
 		$q = $it->Next();
 	}
 	return $count;
+}
+
+function compute_kept($parts, $keep_spec)
+{
+	if (is_array($keep_spec) && isset($keep_spec['from']))
+	{
+		$start = $keep_spec['from'];
+		$kept  = array();
+		for ($i = $start; $i < count($parts); $i++)
+		{
+			if ($parts[$i] === '') { continue; }
+			if (strpos($parts[$i], '|') !== false) { break; }
+			$kept[] = $parts[$i];
+		}
+		return $kept;
+	}
+
+	// Otherwise: integer list of positions.
+	$indices = is_array($keep_spec) ? $keep_spec : array();
+	$kept = array();
+	foreach ($indices as $idx)
+	{
+		if ($idx >= 0 && $idx < count($parts) && $parts[$idx] !== '')
+		{
+			$kept[] = $parts[$idx];
+		}
+	}
+	return $kept;
 }
 
 //-----------------------------------------------------------------------------

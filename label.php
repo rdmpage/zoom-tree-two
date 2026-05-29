@@ -5,14 +5,28 @@
 //   php label.php [--separator=SEP] input.tre              > out.tre   (auto)
 //   php label.php --from-tsv=defs.tsv [--separator=SEP] input.tre > out.tre
 //
-// auto      Group every leaf by the Nth --separator-delimited token of its
-//           label (--token=N, default 0 = the first token).  For each
-//           group with >= 2 members, find the LCA and label it with the
-//           group key if the clade is monophyletic (subtree contains
-//           exactly those leaves) and the LCA isn't already labelled.
-//           Useful for multi-rank leaves like
-//           `Order Family Genus species accession`: run three passes
-//           with --token=2 (genus), --token=1 (family), --token=0 (order).
+// auto      Group every leaf by a key derived from its label.  Three modes
+//           (pick one):
+//             --token=N           Nth token (default; first token if --token
+//                                 is omitted).
+//             --key-tokens=N1,N2  Composite key — concatenate these tokens
+//                                 in order, joined by --separator.  E.g.
+//                                 --key-tokens=1,2 = "Genus species".
+//             --key-from=N        Start at token N and accumulate tokens
+//                                 until one contains a pipe `|` (or the
+//                                 label ends).  Handles "Genus species
+//                                 2|1h|FL" -> "Genus species" AND
+//                                 "Genus sp IT 1|1h|FL" -> "Genus sp IT"
+//                                 with the same flag — useful when the
+//                                 species portion of a label is a
+//                                 variable number of tokens followed by a
+//                                 pipe-delimited sample id.
+//           Empty tokens (from `__` in the source, which the parser turns
+//           into a double space) are silently skipped.
+//           For each group with >= 2 members, find the LCA and label it
+//           with the group key if the clade is monophyletic (subtree
+//           contains exactly those leaves) and the LCA isn't already
+//           labelled.
 //
 // --from-tsv=PATH   Read a `taxon\tmembers` TSV (header row required:
 //           `taxon\tmembers`).  Members are comma-separated; each member is
@@ -40,11 +54,11 @@ require_once __DIR__ . '/rewrite.php';   // emit_newick, format_label, strip_new
 
 function label_main($argv)
 {
-	$separator   = ' ';
-	$tsv_path    = null;
-	$strict      = false;
-	$token_index = 0;
-	$input       = null;
+	$separator = ' ';
+	$tsv_path  = null;
+	$strict    = false;
+	$key_spec  = 0;        // default: first token
+	$input     = null;
 
 	for ($i = 1; $i < count($argv); $i++)
 	{
@@ -59,7 +73,19 @@ function label_main($argv)
 		}
 		else if (preg_match('/^--token=(\d+)$/', $a, $m))
 		{
-			$token_index = (int) $m[1];
+			$key_spec = (int) $m[1];
+		}
+		else if (preg_match('/^--key-tokens=([\d,]+)$/', $a, $m))
+		{
+			$indices = array_values(array_filter(
+				array_map('intval', explode(',', $m[1])),
+				function ($v) { return $v >= 0; }
+			));
+			$key_spec = array('key-tokens' => $indices);
+		}
+		else if (preg_match('/^--key-from=(\d+)$/', $a, $m))
+		{
+			$key_spec = array('key-from' => (int) $m[1]);
 		}
 		else if ($a === '--strict')
 		{
@@ -101,20 +127,20 @@ function label_main($argv)
 	if ($tsv_path !== null)
 	{
 		$taxa  = read_tsv($tsv_path);
-		$stats = infer_tsv_labels($t, $taxa, $separator, $strict, $token_index);
+		$stats = infer_tsv_labels($t, $taxa, $separator, $strict, $key_spec);
 		fwrite(STDERR, sprintf(
-			"label.php (tsv %s, %s, %d taxa, token=%d): labelled=%d, skipped (unmatched=%d, not_monophyletic=%d, already_labelled=%d)\n",
+			"label.php (tsv %s, %s, %d taxa, key=%s): labelled=%d, skipped (unmatched=%d, not_monophyletic=%d, already_labelled=%d)\n",
 			$strict ? 'strict' : 'loose',
-			$tsv_path, count($taxa), $token_index,
+			$tsv_path, count($taxa), describe_key_spec($key_spec),
 			$stats['labelled'], $stats['unmatched'], $stats['not_monophyletic'], $stats['pre_labelled']
 		));
 	}
 	else
 	{
-		$stats = infer_group_labels($t, $separator, $token_index);
+		$stats = infer_group_labels($t, $separator, $key_spec);
 		fwrite(STDERR, sprintf(
-			"label.php (auto, token=%d): labelled=%d, skipped (singletons=%d, not_monophyletic=%d, already_labelled=%d)\n",
-			$token_index,
+			"label.php (auto, key=%s): labelled=%d, skipped (singletons=%d, not_monophyletic=%d, already_labelled=%d)\n",
+			describe_key_spec($key_spec),
 			$stats['labelled'], $stats['singletons'], $stats['not_monophyletic'], $stats['pre_labelled']
 		));
 	}
@@ -146,11 +172,11 @@ function label_newick($newick, $separator)
 // Helpers
 //-----------------------------------------------------------------------------
 
-function infer_group_labels($t, $separator, $token_index = 0)
+function infer_group_labels($t, $separator, $key_spec = 0)
 {
 	$t->BuildWeights($t->GetRoot());   // weight = leaves under subtree
 
-	// Group leaves by the Nth $separator-delimited token of their label.
+	// Group leaves by a key derived from the label per $key_spec.
 	$by_group = array();
 	$it = new NodeIterator($t->GetRoot());
 	$q  = $it->Begin();
@@ -161,7 +187,7 @@ function infer_group_labels($t, $separator, $token_index = 0)
 			$label = $q->GetLabel();
 			if ($label !== '' && $label !== null)
 			{
-				$key = nth_token($label, $separator, $token_index);
+				$key = extract_group_key($label, $separator, $key_spec);
 				if ($key !== '')
 				{
 					$by_group[$key][] = $q;
@@ -296,11 +322,12 @@ function expand_to_leaves($taxon, $taxa, &$cache)
 	return $cache[$taxon];
 }
 
-function infer_tsv_labels($t, $taxa, $separator, $strict = false, $token_index = 0)
+function infer_tsv_labels($t, $taxa, $separator, $strict = false, $key_spec = 0)
 {
 	$t->BuildWeights($t->GetRoot());
 
-	// Index leaves by their Nth-token key (genus, typically — token=0).
+	// Index leaves by the same group-key extractor used in auto mode.  For
+	// TSV matching, $key_spec is normally an int — the genus position.
 	$leaves_by_key = array();
 	$it = new NodeIterator($t->GetRoot());
 	$q  = $it->Begin();
@@ -311,7 +338,8 @@ function infer_tsv_labels($t, $taxa, $separator, $strict = false, $token_index =
 			$label = $q->GetLabel();
 			if ($label !== '' && $label !== null)
 			{
-				$leaves_by_key[nth_token($label, $separator, $token_index)][] = $q;
+				$k = extract_group_key($label, $separator, $key_spec);
+				if ($k !== '') { $leaves_by_key[$k][] = $q; }
 			}
 		}
 		$q = $it->Next();
@@ -381,7 +409,7 @@ function infer_tsv_labels($t, $taxa, $separator, $strict = false, $token_index =
 		}
 		else
 		{
-			if (count_conflicting_leaves($lca, $key_set, $known, $separator, $token_index) > 0)
+			if (count_conflicting_leaves($lca, $key_set, $known, $separator, $key_spec) > 0)
 			{
 				$stats['not_monophyletic']++;
 				continue;
@@ -405,7 +433,7 @@ function infer_tsv_labels($t, $taxa, $separator, $strict = false, $token_index =
 // Number of leaves in $node's subtree whose key is in $known_keys but not in
 // $own_keys.  Zero means "no leaf belonging to a different TSV taxon" —
 // i.e. loose-monophyletic.
-function count_conflicting_leaves($node, $own_keys, $known_keys, $separator, $token_index = 0)
+function count_conflicting_leaves($node, $own_keys, $known_keys, $separator, $key_spec = 0)
 {
 	$count = 0;
 	$stack = array($node);
@@ -417,7 +445,7 @@ function count_conflicting_leaves($node, $own_keys, $known_keys, $separator, $to
 			$label = $n->GetLabel();
 			if ($label !== '' && $label !== null)
 			{
-				$key = nth_token($label, $separator, $token_index);
+				$key = extract_group_key($label, $separator, $key_spec);
 				if (isset($known_keys[$key]) && !isset($own_keys[$key]))
 				{
 					$count++;
@@ -441,17 +469,74 @@ function count_conflicting_leaves($node, $own_keys, $known_keys, $separator, $to
 // Shared helpers
 //-----------------------------------------------------------------------------
 
-// Nth (0-indexed) $separator-delimited token of $s.  Returns '' when there
-// is no such token (or the token itself is empty).  $n=0 is the legacy
-// first_token behaviour.
-function nth_token($s, $separator, $n = 0)
+// Tokenise a label by collapsing runs of whitespace (so `__` from the
+// source — which the parser turns into `  ` — folds into a single
+// separator) and trimming the edges.
+function label_tokens($label, $separator)
 {
-	$parts = explode($separator, $s);
-	if ($n < 0 || $n >= count($parts))
+	$trimmed = trim($label, " \t\n\r");
+	if ($trimmed === '') { return array(); }
+
+	if ($separator === ' ')
 	{
-		return '';
+		return preg_split('/\s+/', $trimmed);
 	}
-	return $parts[$n];
+	// Custom separator: collapse repeats but only of that exact char.
+	$collapsed = preg_replace('/' . preg_quote($separator, '/') . '+/', $separator, $trimmed);
+	return explode($separator, $collapsed);
+}
+
+// Build a group key from $label per $key_spec.
+//   int N                        -> Nth token (default)
+//   ['key-tokens' => [N1, ...]]  -> tokens at those positions joined by $separator
+//   ['key-from'   => N]          -> from token N, accumulate until a token
+//                                   containing `|` (sample-id stop)
+// Empty tokens are silently skipped in the composite/from modes.
+function extract_group_key($label, $separator, $key_spec)
+{
+	$parts = label_tokens($label, $separator);
+	if (empty($parts)) { return ''; }
+
+	if (is_int($key_spec))
+	{
+		return ($key_spec >= 0 && $key_spec < count($parts)) ? $parts[$key_spec] : '';
+	}
+
+	if (isset($key_spec['key-tokens']))
+	{
+		$kept = array();
+		foreach ($key_spec['key-tokens'] as $i)
+		{
+			if ($i >= 0 && $i < count($parts) && $parts[$i] !== '')
+			{
+				$kept[] = $parts[$i];
+			}
+		}
+		return implode($separator, $kept);
+	}
+
+	if (isset($key_spec['key-from']))
+	{
+		$start = $key_spec['key-from'];
+		$kept  = array();
+		for ($i = $start; $i < count($parts); $i++)
+		{
+			if ($parts[$i] === '') { continue; }
+			if (strpos($parts[$i], '|') !== false) { break; }
+			$kept[] = $parts[$i];
+		}
+		return implode($separator, $kept);
+	}
+
+	return '';
+}
+
+function describe_key_spec($key_spec)
+{
+	if (is_int($key_spec))                      { return 'token=' . $key_spec; }
+	if (isset($key_spec['key-tokens']))         { return 'key-tokens=' . implode(',', $key_spec['key-tokens']); }
+	if (isset($key_spec['key-from']))           { return 'key-from=' . $key_spec['key-from']; }
+	return '?';
 }
 
 function compute_lca($nodes)

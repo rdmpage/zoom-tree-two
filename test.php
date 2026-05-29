@@ -449,6 +449,61 @@ prune_leaf_labels($t_prune2, ' ', array(2, 3));
 eq($t_prune2->GetRoot()->GetChild()->GetLabel(), 'SomeClade', 'prune: internal labels untouched');
 
 //-----------------------------------------------------------------------------
+// format_label — keep Newick output unquoted when the label is legal
+// unquoted (per Newick 8:45 the only forbidden chars are whitespace and
+// `()[]':;,`).  Pipes, slashes, dots, plus, dashes are fine unquoted.
+//-----------------------------------------------------------------------------
+
+eq(format_label('Genus_species'),                        'Genus_species',                              'fmt: plain alnum+_ unchanged');
+eq(format_label('Genus species'),                        'Genus_species',                              'fmt: space -> _');
+eq(format_label('Family|sample|locality'),               'Family|sample|locality',                     'fmt: pipes ok unquoted');
+eq(format_label('Hydropsychidae burksi 2|1h|FL'),        'Hydropsychidae_burksi_2|1h|FL',              'fmt: spaces -> _, pipes preserved');
+eq(format_label('weird (one)'),                          "'weird (one)'",                              'fmt: parens force quote');
+eq(format_label("has 'quote'"),                          "'has ''quote'''",                            'fmt: embedded single quotes doubled');
+eq(format_label('with:colon'),                           "'with:colon'",                               'fmt: colon forbidden -> quoted');
+
+//-----------------------------------------------------------------------------
+// label.php --key-tokens and --key-from
+//-----------------------------------------------------------------------------
+
+// --key-tokens=1,2: Genus + species composite, monophyletic at innermost.
+$nwk_kt = "(((Genus_burksi_1|x|A:1,Genus_burksi_2|x|A:1):1,Other_thing_3|x|B:1):1,Solo_lone_4|x|C:1);";
+$t_kt   = parse_newick(strip_newick_comments($nwk_kt));
+$s_kt   = infer_group_labels($t_kt, ' ', array('key-tokens' => array(0, 1)));
+eq($s_kt['labelled'], 1, 'key-tokens: Genus_burksi composite labelled');
+eq(internal_labels_in_tree($t_kt), array('Genus burksi'), 'key-tokens: clade carries the composite key');
+
+// --key-from=0: stops at the first pipe-bearing token.  Handles
+// "Genus burksi 2|x|A" (-> "Genus burksi") and "Genus sp IT 1|x|B"
+// (-> "Genus sp IT") with the same rule.
+$nwk_kf = "(((Genus_burksi_1|x|A:1,Genus_burksi_2|x|A:1):1,(Genus_sp__IT_1|x|B:1,Genus_sp__IT_2|x|B:1):1):1,Solo_lone_4|x|C:1);";
+$t_kf   = parse_newick(strip_newick_comments($nwk_kf));
+$s_kf   = infer_group_labels($t_kf, ' ', array('key-from' => 0));
+eq($s_kf['labelled'], 2, 'key-from: two species clades labelled');
+$labs_kf = internal_labels_in_tree($t_kf);
+sort($labs_kf);
+eq($labs_kf, array('Genus burksi', 'Genus sp IT'), 'key-from: named + sp species both captured');
+
+// --key-from collapses the `  ` from `__` so the IT survives the stop check.
+// Verify by isolating a single sp-only group.
+$nwk_kf2 = "((Genus_sp__IT_1|x|B:1,Genus_sp__IT_2|x|B:1):1,Other_genus_3|x|C:1);";
+$t_kf2   = parse_newick(strip_newick_comments($nwk_kf2));
+infer_group_labels($t_kf2, ' ', array('key-from' => 0));
+eq(internal_labels_in_tree($t_kf2), array('Genus sp IT'), 'key-from: __ collapse keeps IT in the key');
+
+//-----------------------------------------------------------------------------
+// prune-labels.php --keep-from
+//-----------------------------------------------------------------------------
+
+$nwk_pkf = "((Family_Genus_burksi_2|1h|FL:1,Family_Genus_sp__IT_1|1h|VA:1):1,Outgroup_only_5|x|Z:1);";
+$t_pkf   = parse_newick(strip_newick_comments($nwk_pkf));
+prune_leaf_labels($t_pkf, ' ', array('from' => 1));
+$leaves_pkf = leaf_labels_in_tree($t_pkf);
+eq($leaves_pkf,
+   array('Genus burksi', 'Genus sp IT', 'only'),
+   'keep-from=1: named + sp species kept cleanly; outgroup keeps only the pre-pipe part');
+
+//-----------------------------------------------------------------------------
 
 echo "\n$PASS passed, $FAIL failed\n";
 exit($FAIL > 0 ? 1 : 0);
