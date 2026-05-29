@@ -8,6 +8,7 @@
 // main when invoked as a script) and call build_v1_json() directly.
 
 require_once __DIR__ . '/build.php';
+require_once __DIR__ . '/label.php';   // infer_group_labels(), label_newick()
 
 $PASS = 0;
 $FAIL = 0;
@@ -228,6 +229,76 @@ $bs_m   = array_filter($treeM['bootstrap'], function ($v) { return $v !== ''; })
 $post_m = array_filter($treeM['posterior'], function ($v) { return $v !== ''; });
 eq(array_values($bs_m),   array('95'),   'mixed: one bootstrap value captured');
 eq(array_values($post_m), array('0.98'), 'mixed: one posterior value captured');
+
+//-----------------------------------------------------------------------------
+// label.php — infer internal labels from leaf-name groups.
+//-----------------------------------------------------------------------------
+
+function internal_labels_in_tree($t)
+{
+	$out = array();
+	$it  = new NodeIterator($t->GetRoot());
+	$q   = $it->Begin();
+	while ($q != null)
+	{
+		if (!$q->IsLeaf())
+		{
+			$lab = $q->GetLabel();
+			if ($lab !== '' && $lab !== null)
+			{
+				$out[] = $lab;
+			}
+		}
+		$q = $it->Next();
+	}
+	return $out;
+}
+
+// Case 1: monophyletic Aa clade gets labelled.
+$nwk1 = strip_newick_comments("(((Aa_x:1,Aa_y:1):1,Bb_z:1):1,Cc_v:1);");
+$t1   = parse_newick($nwk1);
+$s1   = infer_group_labels($t1, ' ');
+eq($s1['labelled'],         1, 'label monophyletic: 1 group labelled');
+eq($s1['singletons'],       2, 'label monophyletic: 2 singletons');
+eq($s1['not_monophyletic'], 0, 'label monophyletic: 0 non-monophyletic');
+eq($s1['pre_labelled'],     0, 'label monophyletic: 0 pre-labelled');
+eq(internal_labels_in_tree($t1), array('Aa'), 'label monophyletic: Aa applied to LCA');
+
+// Case 2: Aa species split across non-adjacent clades — skipped.
+$nwk2 = strip_newick_comments("(((Aa_x:1,Bb_x:1):1,Aa_y:1):1,Cc_v:1);");
+$t2   = parse_newick($nwk2);
+$s2   = infer_group_labels($t2, ' ');
+eq($s2['labelled'],         0, 'label paraphyletic: 0 labelled');
+eq($s2['not_monophyletic'], 1, 'label paraphyletic: 1 non-monophyletic');
+eq(internal_labels_in_tree($t2), array(), 'label paraphyletic: no labels added');
+
+// Case 3: pre-labelled LCA is not overwritten.
+$nwk3 = strip_newick_comments("(((Aa_x:1,Aa_y:1)Existing:1,Bb_z:1):1,Cc_v:1);");
+$t3   = parse_newick($nwk3);
+$s3   = infer_group_labels($t3, ' ');
+eq($s3['labelled'],     0, 'label pre-existing: 0 labelled');
+eq($s3['pre_labelled'], 1, 'label pre-existing: 1 pre-labelled');
+eq(internal_labels_in_tree($t3), array('Existing'), 'label pre-existing: existing label preserved');
+
+// Case 4: end-to-end — labels survive build, and a [&bootstrap=N] on the same
+// internal also survives the round trip.
+$nwk4 = "(((Aa_x:1,Aa_y:1)[&bootstrap=95]:1,Bb_z:1):1,Cc_v:1);";
+$t4   = parse_newick(strip_newick_comments($nwk4));
+infer_group_labels($t4, ' ');
+$out4 = emit_newick($t4->GetRoot()) . ';';
+$j4   = build_v1_json($out4);
+
+$found_aa_id = -1;
+for ($i = 0; $i < $j4['n']; $i++)
+{
+	if ($j4['labels'][$i] === 'Aa')
+	{
+		$found_aa_id = $i;
+		break;
+	}
+}
+ok($found_aa_id >= 0,                     'label round-trip: Aa internal label in JSON');
+eq($j4['bootstrap'][$found_aa_id], '95',  'label round-trip: bootstrap=95 still on that node');
 
 //-----------------------------------------------------------------------------
 
