@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-store">
 <title>zoom-tree-two</title>
 <style>
 	html, body
@@ -14,10 +15,84 @@
 		color: #222;
 	}
 
+	#navbar
+	{
+		position: absolute;
+		top: 0; left: 0; right: 0;
+		height: 40px;
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 0 12px;
+		background: #fff;
+		border-bottom: 1px solid #ddd;
+		box-sizing: border-box;
+		z-index: 10;
+	}
+
+	#navbar .title
+	{
+		font-weight: 600;
+		font-size: 12px;
+		color: #444;
+		white-space: nowrap;
+	}
+
+	#search
+	{
+		flex: 0 1 280px;
+		height: 26px;
+		padding: 0 8px;
+		font-size: 12px;
+		border: 1px solid #aaa;
+		border-radius: 4px;
+		outline: none;
+	}
+
+	#search:focus      { border-color: #66a; }
+	#search.no-match   { border-color: #c33; background: #fff0f0; }
+
+	#nav-status
+	{
+		margin-left: auto;
+		font-size: 11px;
+		color: #888;
+		font-variant-numeric: tabular-nums;
+	}
+
+	#zoom-controls
+	{
+		display: flex;
+		gap: 4px;
+	}
+
+	#zoom-controls button
+	{
+		width: 28px;
+		height: 28px;
+		padding: 0;
+		border: 1px solid #aaa;
+		background: #fff;
+		font-size: 16px;
+		line-height: 1;
+		cursor: pointer;
+		border-radius: 4px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	#zoom-controls button:disabled
+	{
+		color: #ccc;
+		cursor: default;
+	}
+
 	#viewer
 	{
 		position: absolute;
-		inset: 0;
+		top: 40px;
+		left: 0; right: 0; bottom: 0;
 		overflow: auto;
 		background: #fff;
 		user-select: none;
@@ -42,7 +117,10 @@
 		width: 100%;
 		overflow: visible;
 		box-sizing: border-box;
+		transition: background-color 1.2s ease-out;
 	}
+
+	.row.highlight    { background: #ffe680; transition: none; }
 
 	.row svg          { display: block; }
 	.row svg path     { stroke: #222; stroke-width: 1; fill: none; shape-rendering: crispEdges; }
@@ -52,61 +130,23 @@
 	.row svg text     { font-family: -apple-system, "Helvetica Neue", sans-serif; font-size: 11px; dominant-baseline: middle; fill: #222; }
 	.row svg .g-internal { fill: #222; }
 	.row svg .g-closed   { fill: #222; }
-
-	#status
-	{
-		position: fixed;
-		bottom: 6px;
-		right: 8px;
-		font-size: 10px;
-		color: #888;
-		background: rgba(255,255,255,0.85);
-		padding: 2px 6px;
-		border-radius: 3px;
-		pointer-events: none;
-	}
-
-	#controls
-	{
-		position: fixed;
-		top: 6px;
-		right: 8px;
-		display: flex;
-		gap: 4px;
-	}
-
-	#controls button
-	{
-		width: 28px;
-		height: 28px;
-		border: 1px solid #aaa;
-		background: #fff;
-		font-size: 16px;
-		line-height: 26px;
-		text-align: center;
-		cursor: pointer;
-		border-radius: 4px;
-	}
-
-	#controls button:disabled
-	{
-		color: #ccc;
-		cursor: default;
-	}
 </style>
 </head>
 <body>
 
+<div id="navbar">
+	<span class="title">zoom-tree</span>
+	<input id="search" type="text" placeholder="Search labels…" autocomplete="off" spellcheck="false" autocapitalize="off">
+	<span id="nav-status">loading…</span>
+	<div id="zoom-controls">
+		<button id="zoom-out" type="button" title="Zoom out (−)">&minus;</button>
+		<button id="zoom-in"  type="button" title="Zoom in (+)">+</button>
+	</div>
+</div>
+
 <div id="viewer">
 	<div id="pages"></div>
 </div>
-
-<div id="controls">
-	<button id="zoom-out" type="button" title="Zoom out (-)">&minus;</button>
-	<button id="zoom-in"  type="button" title="Zoom in (+)">+</button>
-</div>
-
-<div id="status">loading…</div>
 
 <script src="src/js/glyph.js"></script>
 <script src="src/js/viewer.js"></script>
@@ -116,9 +156,10 @@
 		var params = new URLSearchParams(window.location.search);
 		var id = params.get('id') || '62057be74ac6';  // default = gekkota for dev convenience
 
-		var status  = document.getElementById('status');
+		var status  = document.getElementById('nav-status');
 		var btnIn   = document.getElementById('zoom-in');
 		var btnOut  = document.getElementById('zoom-out');
+		var search  = document.getElementById('search');
 
 		fetch('trees/' + id + '.json')
 			.then(function (r)
@@ -132,19 +173,41 @@
 					tree:    tree,
 					viewer:  document.getElementById('viewer'),
 					pages:   document.getElementById('pages'),
-					zoom:    tree.config.max_zoom,
+					zoom:    tree.config.min_zoom,   // placeholder — pickInitialZoom overrides
 					onChange: function (v)
 					{
-						status.textContent = id + '  n=' + v.visibleIds.length + '/' + tree.n +
-							'  z=' + v.zoom + '/' + tree.config.max_zoom;
+						status.textContent =
+							'n=' + v.visibleIds.length + '/' + tree.n +
+							'   z=' + v.zoom + '/' + tree.config.max_zoom;
 						btnIn.disabled  = (v.zoom >= tree.config.max_zoom);
 						btnOut.disabled = (v.zoom <= tree.config.min_zoom);
 					}
 				});
+
+				// Land on the largest zoom that still fits in the viewer.
+				viewer.zoom = viewer.pickInitialZoom();
 				viewer.render();
 
 				btnIn.addEventListener('click',  function () { viewer.setZoom(viewer.zoom + 1); });
 				btnOut.addEventListener('click', function () { viewer.setZoom(viewer.zoom - 1); });
+
+				search.addEventListener('keydown', function (e)
+				{
+					if (e.key !== 'Enter') { return; }
+					var q = search.value.trim();
+					if (!q) { return; }
+					var found = viewer.searchByLabel(q);
+					if (found === -1)
+					{
+						search.classList.add('no-match');
+						setTimeout(function () { search.classList.remove('no-match'); }, 1200);
+					}
+					else
+					{
+						search.classList.remove('no-match');
+						viewer.scrollToNode(found);
+					}
+				});
 			})
 			.catch(function (e)
 			{

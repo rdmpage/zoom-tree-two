@@ -248,6 +248,109 @@ PageViewer.prototype.setZoom = function (zNew, anchorId)
 	this.onChange(this);
 };
 
+// Pixel height of the tree at zoom z — sum of row heights for the visible
+// set.  Used by pickInitialZoom() to land on an overview that actually fits.
+// Monotonically non-decreasing in z: when a closed internal becomes open it
+// saves 12 px (24 → 12), but each new visible node adds ≥ 12 px, so the
+// total never goes down.
+PageViewer.prototype.treeHeightAt = function (z)
+{
+	var tree    = this.tree;
+	var hOpen   = tree.config.row_height_open;
+	var hClosed = tree.config.row_height_closed;
+	var n       = tree.n;
+	var total   = 0;
+
+	for (var i = 0; i < n; i++)
+	{
+		if (tree.first_zoom[i] > z) { continue; }
+
+		var cl = tree.child_l[i];
+		if (cl === -1)
+		{
+			total += hOpen;                              // leaf
+		}
+		else if (tree.first_zoom[cl] <= z)
+		{
+			total += hOpen;                              // open internal
+		}
+		else
+		{
+			total += hClosed;                            // closed triangle
+		}
+	}
+	return total;
+};
+
+// Largest zoom level whose tree height fits inside the viewer (with a small
+// buffer).  Walks upward from min_zoom — treeHeightAt is monotonic, so we
+// stop as soon as a level overflows.  Falls back to min_zoom if even the
+// overview overflows (i.e. tiny viewports).
+PageViewer.prototype.pickInitialZoom = function ()
+{
+	var tree   = this.tree;
+	var budget = this.viewerEl.clientHeight - 40;
+	if (budget <= 0) { return tree.config.min_zoom; }
+
+	var best = tree.config.min_zoom;
+	for (var z = tree.config.min_zoom; z <= tree.config.max_zoom; z++)
+	{
+		if (this.treeHeightAt(z) <= budget) { best = z; }
+		else                                { break; }
+	}
+	return best;
+};
+
+// First node id whose label contains `query` (case-insensitive substring).
+// Returns -1 on no match.  O(N) — fine for trees up to ~100 k nodes.
+PageViewer.prototype.searchByLabel = function (query)
+{
+	var q = String(query || '').toLowerCase();
+	if (!q) { return -1; }
+	var labels = this.tree.labels;
+	for (var i = 0; i < labels.length; i++)
+	{
+		var lab = labels[i];
+		if (lab && lab.toLowerCase().indexOf(q) !== -1)
+		{
+			return i;
+		}
+	}
+	return -1;
+};
+
+// Make `id` visible (bumping zoom up to first_zoom[id] if needed) and centre
+// it in the viewport.  Briefly highlights the row.
+PageViewer.prototype.scrollToNode = function (id)
+{
+	var needed = this.tree.first_zoom[id];
+
+	if (needed > this.zoom)
+	{
+		if (this.io) { this.io.disconnect(); }
+		this.zoom = needed;
+		this.computeVisible();
+		this.buildPages();
+		this.observe();
+		this.onChange(this);
+	}
+
+	var y = this.absoluteY(id);
+	this.viewerEl.scrollTop = y - this.viewerEl.clientHeight / 2;
+	this.fillVisibleNow();
+
+	var self = this;
+	requestAnimationFrame(function ()
+	{
+		var row = self.pagesEl.querySelector('.row[data-id="' + id + '"]');
+		if (!row) { return; }
+		row.classList.add('highlight');
+		// The CSS transition handles the fade-out; we just need to drop the
+		// class so the colour returns to its default.
+		setTimeout(function () { row.classList.remove('highlight'); }, 30);
+	});
+};
+
 PageViewer.prototype.fillVisibleNow = function ()
 {
 	var pad = this.paddingTop;

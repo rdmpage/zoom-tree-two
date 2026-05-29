@@ -394,16 +394,21 @@ function parse_newick($newick)
 	
 		switch ($state)
 		{
-			case 0: // getname				
+			case 0: // getname
 				switch ($token)
 				{
 					case TokenTypes::Number:
 					case TokenTypes::QuotedString:
 					case TokenTypes::String:
-						$label = $scanner->buffer;												
+						$label = $scanner->buffer;
+						// Newick convention: in unquoted labels, '_' means space.
+						if ($token == TokenTypes::String)
+						{
+							$label = str_replace('_', ' ', $label);
+						}
 						$curnode->SetLabel($label);
 						$t->num_leaves++;
-					
+
 						$token = $scanner->GetToken();
 						$state = 1;
 						break;
@@ -530,7 +535,12 @@ function parse_newick($newick)
 					case TokenTypes::Number:
 					case TokenTypes::QuotedString:
 					case TokenTypes::String:
-						$label = $scanner->buffer;												
+						$label = $scanner->buffer;
+						// Newick convention: in unquoted labels, '_' means space.
+						if ($token == TokenTypes::String)
+						{
+							$label = str_replace('_', ' ', $label);
+						}
 						$curnode->SetLabel($label);
 						$token = $scanner->GetToken();
 						$state = 1;
