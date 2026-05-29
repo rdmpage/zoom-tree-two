@@ -5,11 +5,14 @@
 //   php label.php [--separator=SEP] input.tre              > out.tre   (auto)
 //   php label.php --from-tsv=defs.tsv [--separator=SEP] input.tre > out.tre
 //
-// auto      Group every leaf by the first --separator-delimited token of
-//           its label (default separator " ").  For each group with >= 2
-//           members, find the LCA and label it with the group key if the
-//           clade is monophyletic (subtree contains exactly those leaves)
-//           and the LCA isn't already labelled.
+// auto      Group every leaf by the Nth --separator-delimited token of its
+//           label (--token=N, default 0 = the first token).  For each
+//           group with >= 2 members, find the LCA and label it with the
+//           group key if the clade is monophyletic (subtree contains
+//           exactly those leaves) and the LCA isn't already labelled.
+//           Useful for multi-rank leaves like
+//           `Order Family Genus species accession`: run three passes
+//           with --token=2 (genus), --token=1 (family), --token=0 (order).
 //
 // --from-tsv=PATH   Read a `taxon\tmembers` TSV (header row required:
 //           `taxon\tmembers`).  Members are comma-separated; each member is
@@ -37,10 +40,11 @@ require_once __DIR__ . '/rewrite.php';   // emit_newick, format_label, strip_new
 
 function label_main($argv)
 {
-	$separator = ' ';
-	$tsv_path  = null;
-	$strict    = false;
-	$input     = null;
+	$separator   = ' ';
+	$tsv_path    = null;
+	$strict      = false;
+	$token_index = 0;
+	$input       = null;
 
 	for ($i = 1; $i < count($argv); $i++)
 	{
@@ -52,6 +56,10 @@ function label_main($argv)
 		else if (preg_match('/^--from-tsv=(.+)$/', $a, $m))
 		{
 			$tsv_path = $m[1];
+		}
+		else if (preg_match('/^--token=(\d+)$/', $a, $m))
+		{
+			$token_index = (int) $m[1];
 		}
 		else if ($a === '--strict')
 		{
@@ -93,19 +101,20 @@ function label_main($argv)
 	if ($tsv_path !== null)
 	{
 		$taxa  = read_tsv($tsv_path);
-		$stats = infer_tsv_labels($t, $taxa, $separator, $strict);
+		$stats = infer_tsv_labels($t, $taxa, $separator, $strict, $token_index);
 		fwrite(STDERR, sprintf(
-			"label.php (tsv %s, %s, %d taxa): labelled=%d, skipped (unmatched=%d, not_monophyletic=%d, already_labelled=%d)\n",
+			"label.php (tsv %s, %s, %d taxa, token=%d): labelled=%d, skipped (unmatched=%d, not_monophyletic=%d, already_labelled=%d)\n",
 			$strict ? 'strict' : 'loose',
-			$tsv_path, count($taxa),
+			$tsv_path, count($taxa), $token_index,
 			$stats['labelled'], $stats['unmatched'], $stats['not_monophyletic'], $stats['pre_labelled']
 		));
 	}
 	else
 	{
-		$stats = infer_group_labels($t, $separator);
+		$stats = infer_group_labels($t, $separator, $token_index);
 		fwrite(STDERR, sprintf(
-			"label.php (auto): labelled=%d, skipped (singletons=%d, not_monophyletic=%d, already_labelled=%d)\n",
+			"label.php (auto, token=%d): labelled=%d, skipped (singletons=%d, not_monophyletic=%d, already_labelled=%d)\n",
+			$token_index,
 			$stats['labelled'], $stats['singletons'], $stats['not_monophyletic'], $stats['pre_labelled']
 		));
 	}
@@ -137,11 +146,11 @@ function label_newick($newick, $separator)
 // Helpers
 //-----------------------------------------------------------------------------
 
-function infer_group_labels($t, $separator)
+function infer_group_labels($t, $separator, $token_index = 0)
 {
 	$t->BuildWeights($t->GetRoot());   // weight = leaves under subtree
 
-	// Group leaves by the first $separator-delimited token of their label.
+	// Group leaves by the Nth $separator-delimited token of their label.
 	$by_group = array();
 	$it = new NodeIterator($t->GetRoot());
 	$q  = $it->Begin();
@@ -152,7 +161,7 @@ function infer_group_labels($t, $separator)
 			$label = $q->GetLabel();
 			if ($label !== '' && $label !== null)
 			{
-				$key = first_token($label, $separator);
+				$key = nth_token($label, $separator, $token_index);
 				if ($key !== '')
 				{
 					$by_group[$key][] = $q;
@@ -287,11 +296,11 @@ function expand_to_leaves($taxon, $taxa, &$cache)
 	return $cache[$taxon];
 }
 
-function infer_tsv_labels($t, $taxa, $separator, $strict = false)
+function infer_tsv_labels($t, $taxa, $separator, $strict = false, $token_index = 0)
 {
 	$t->BuildWeights($t->GetRoot());
 
-	// Index leaves by their first-token key (genus, typically).
+	// Index leaves by their Nth-token key (genus, typically — token=0).
 	$leaves_by_key = array();
 	$it = new NodeIterator($t->GetRoot());
 	$q  = $it->Begin();
@@ -302,7 +311,7 @@ function infer_tsv_labels($t, $taxa, $separator, $strict = false)
 			$label = $q->GetLabel();
 			if ($label !== '' && $label !== null)
 			{
-				$leaves_by_key[first_token($label, $separator)][] = $q;
+				$leaves_by_key[nth_token($label, $separator, $token_index)][] = $q;
 			}
 		}
 		$q = $it->Next();
@@ -372,7 +381,7 @@ function infer_tsv_labels($t, $taxa, $separator, $strict = false)
 		}
 		else
 		{
-			if (count_conflicting_leaves($lca, $key_set, $known, $separator) > 0)
+			if (count_conflicting_leaves($lca, $key_set, $known, $separator, $token_index) > 0)
 			{
 				$stats['not_monophyletic']++;
 				continue;
@@ -396,7 +405,7 @@ function infer_tsv_labels($t, $taxa, $separator, $strict = false)
 // Number of leaves in $node's subtree whose key is in $known_keys but not in
 // $own_keys.  Zero means "no leaf belonging to a different TSV taxon" —
 // i.e. loose-monophyletic.
-function count_conflicting_leaves($node, $own_keys, $known_keys, $separator)
+function count_conflicting_leaves($node, $own_keys, $known_keys, $separator, $token_index = 0)
 {
 	$count = 0;
 	$stack = array($node);
@@ -408,7 +417,7 @@ function count_conflicting_leaves($node, $own_keys, $known_keys, $separator)
 			$label = $n->GetLabel();
 			if ($label !== '' && $label !== null)
 			{
-				$key = first_token($label, $separator);
+				$key = nth_token($label, $separator, $token_index);
 				if (isset($known_keys[$key]) && !isset($own_keys[$key]))
 				{
 					$count++;
@@ -432,14 +441,17 @@ function count_conflicting_leaves($node, $own_keys, $known_keys, $separator)
 // Shared helpers
 //-----------------------------------------------------------------------------
 
-function first_token($s, $separator)
+// Nth (0-indexed) $separator-delimited token of $s.  Returns '' when there
+// is no such token (or the token itself is empty).  $n=0 is the legacy
+// first_token behaviour.
+function nth_token($s, $separator, $n = 0)
 {
-	$pos = strpos($s, $separator);
-	if ($pos === false)
+	$parts = explode($separator, $s);
+	if ($n < 0 || $n >= count($parts))
 	{
-		return $s;
+		return '';
 	}
-	return substr($s, 0, $pos);
+	return $parts[$n];
 }
 
 function compute_lca($nodes)

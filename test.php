@@ -8,7 +8,8 @@
 // main when invoked as a script) and call build_v1_json() directly.
 
 require_once __DIR__ . '/build.php';
-require_once __DIR__ . '/label.php';   // infer_group_labels(), label_newick()
+require_once __DIR__ . '/label.php';        // infer_group_labels(), label_newick()
+require_once __DIR__ . '/prune-labels.php'; // prune_leaf_labels()
 
 $PASS = 0;
 $FAIL = 0;
@@ -367,6 +368,85 @@ $t_conflict   = parse_newick(strip_newick_comments($nwk_conflict));
 $s_conflict   = infer_tsv_labels($t_conflict, $tsv_conflict, ' ', false);
 eq($s_conflict['labelled'],         0, 'tsv loose: Fooidae rejected — Cc (BarFam member) is inside the subtree');
 eq($s_conflict['not_monophyletic'], 1, 'tsv loose: 1 not_monophyletic from real paraphyly');
+
+//-----------------------------------------------------------------------------
+// label.php --token=N: select a non-zero token for multi-rank leaf labels.
+//-----------------------------------------------------------------------------
+
+// Leaves carry "Order Family Genus species" — three levels we might label.
+$nwk_multi  = "(((OrdA_FamA_GenA_spA:1,OrdA_FamA_GenA_spB:1):1,OrdA_FamB_GenC_spC:1):1,OrdB_FamD_GenD_spD:1);";
+
+// token=0 (default): OrdA is monophyletic in the first three leaves.
+$t_t0   = parse_newick(strip_newick_comments($nwk_multi));
+$s_t0   = infer_group_labels($t_t0, ' ', 0);
+eq($s_t0['labelled'], 1, 'token=0: OrdA labelled (3 leaves monophyletic)');
+eq(internal_labels_in_tree($t_t0), array('OrdA'), 'token=0: only OrdA applied');
+
+// token=1: families — FamA has 2 leaves, monophyletic at the innermost clade.
+$t_t1   = parse_newick(strip_newick_comments($nwk_multi));
+$s_t1   = infer_group_labels($t_t1, ' ', 1);
+eq($s_t1['labelled'], 1, 'token=1: FamA labelled');
+eq(internal_labels_in_tree($t_t1), array('FamA'), 'token=1: only FamA applied');
+
+// token=2: genera — GenA has 2 leaves; GenC and GenD are singletons.
+$t_t2   = parse_newick(strip_newick_comments($nwk_multi));
+$s_t2   = infer_group_labels($t_t2, ' ', 2);
+eq($s_t2['labelled'], 1, 'token=2: GenA labelled');
+eq(internal_labels_in_tree($t_t2), array('GenA'), 'token=2: only GenA applied');
+
+// Sequential passes mimic the CLI pipeline.  Run genus first (most specific),
+// then family, then order — earlier wins at any shared LCA.
+$t_seq = parse_newick(strip_newick_comments($nwk_multi));
+infer_group_labels($t_seq, ' ', 2);   // GenA -> innermost clade
+infer_group_labels($t_seq, ' ', 1);   // FamA wants the same clade -> pre-labelled
+infer_group_labels($t_seq, ' ', 0);   // OrdA -> middle clade (still empty)
+$seq_labels = internal_labels_in_tree($t_seq);
+sort($seq_labels);
+eq($seq_labels, array('GenA', 'OrdA'), 'multi-pass: GenA at innermost, OrdA at middle, FamA pre-labelled');
+
+// Reverse order: family wins at innermost, genus skipped.
+$t_seq2 = parse_newick(strip_newick_comments($nwk_multi));
+infer_group_labels($t_seq2, ' ', 0);   // OrdA -> middle clade
+infer_group_labels($t_seq2, ' ', 1);   // FamA -> innermost clade
+infer_group_labels($t_seq2, ' ', 2);   // GenA at same LCA as FamA -> pre-labelled
+$seq2_labels = internal_labels_in_tree($t_seq2);
+sort($seq2_labels);
+eq($seq2_labels, array('FamA', 'OrdA'), 'multi-pass reversed: OrdA + FamA, GenA pre-labelled');
+
+//-----------------------------------------------------------------------------
+// prune-labels.php — keep only specified leaf-label tokens.
+//-----------------------------------------------------------------------------
+
+function leaf_labels_in_tree($t)
+{
+	$out = array();
+	$it  = new NodeIterator($t->GetRoot());
+	$q   = $it->Begin();
+	while ($q != null)
+	{
+		if ($q->IsLeaf())
+		{
+			$out[] = $q->GetLabel();
+		}
+		$q = $it->Next();
+	}
+	return $out;
+}
+
+$nwk_prune = "((OrdA_FamA_GenA_spA_idA:1,OrdA_FamA_GenA_spB_idB:1):1,(OrdB_FamB_GenB_spC_idC:1,Short:1):1);";
+$t_prune   = parse_newick(strip_newick_comments($nwk_prune));
+$changed   = prune_leaf_labels($t_prune, ' ', array(2, 3));
+
+eq($changed, 3, 'prune: 3 leaves changed (Short has too few tokens, unchanged)');
+eq(leaf_labels_in_tree($t_prune),
+   array('GenA spA', 'GenA spB', 'GenB spC', 'Short'),
+   'prune: kept-tokens applied; under-tokenised leaf preserved as-is');
+
+// Internal labels untouched: add one, run prune, confirm it survives.
+$t_prune2 = parse_newick(strip_newick_comments($nwk_prune));
+$t_prune2->GetRoot()->GetChild()->SetLabel('SomeClade');   // first internal child
+prune_leaf_labels($t_prune2, ' ', array(2, 3));
+eq($t_prune2->GetRoot()->GetChild()->GetLabel(), 'SomeClade', 'prune: internal labels untouched');
 
 //-----------------------------------------------------------------------------
 
