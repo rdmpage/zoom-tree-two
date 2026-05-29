@@ -184,6 +184,51 @@ eq($treeA['inorder'],    $tree['inorder'],    'comments stripped: same inorder')
 eq($treeA['first_zoom'], $tree['first_zoom'], 'comments stripped: same first_zoom');
 eq($treeA['id'],         $tree['id'],         'comments stripped: same id (hash of stripped Newick)');
 
+// Plain trees (no metacomments) have all-empty support arrays.
+ok(is_array($tree['bootstrap']) && count($tree['bootstrap']) === $tree['n'], 'bootstrap: array of length n');
+ok(is_array($tree['posterior']) && count($tree['posterior']) === $tree['n'], 'posterior: array of length n');
+$bs_nonempty = array_filter($tree['bootstrap'], function ($v) { return $v !== ''; });
+eq(count($bs_nonempty), 0, 'balanced-8: bootstrap all empty (no metacomments in input)');
+
+//-----------------------------------------------------------------------------
+// BEAST-style [&bootstrap=NN] metacomments survive build.php → bootstrap[].
+//-----------------------------------------------------------------------------
+
+$with_boot =
+	"(((a:1,b:1)[&bootstrap=90]:1,(c:1,d:1)[&bootstrap=80]:1)[&bootstrap=95]:1," .
+	"((e:1,f:1)[&bootstrap=70]:1,(g:1,h:1)[&bootstrap=100]:1)[&bootstrap=85]:1);\n";
+$treeB = build_v1_json($with_boot);
+
+eq($treeB['n'], 15, 'with bootstrap: same topology (n=15)');
+$bs = $treeB['bootstrap'];
+$bs_nonempty = array_filter($bs, function ($v) { return $v !== ''; });
+sort($bs_nonempty);
+eq(array_values($bs_nonempty), array('70','80','85','90','95','100'), 'with bootstrap: 6 internal supports captured');
+
+// IDs are assigned in preorder (root=0).  Spot-check the root has no support
+// and at least one leaf has none.
+eq($bs[0], '', 'with bootstrap: root[0] has no support');
+
+// Both arrays present and same length n.
+eq(count($treeB['bootstrap']), $treeB['n'], 'with bootstrap: bootstrap length == n');
+eq(count($treeB['posterior']), $treeB['n'], 'with bootstrap: posterior length == n');
+
+// posterior is untouched in a bootstrap-only tree
+$post_nonempty = array_filter($treeB['posterior'], function ($v) { return $v !== ''; });
+eq(count($post_nonempty), 0, 'with bootstrap: posterior all empty');
+
+//-----------------------------------------------------------------------------
+// Mixed [&bootstrap=N,posterior=P] metacomments on the same node.
+//-----------------------------------------------------------------------------
+
+$mixed = "(((a:1,b:1)[&bootstrap=95,posterior=0.98]:1,(c:1,d:1):1):1,(e:1,f:1):1);\n";
+$treeM = build_v1_json($mixed);
+
+$bs_m   = array_filter($treeM['bootstrap'], function ($v) { return $v !== ''; });
+$post_m = array_filter($treeM['posterior'], function ($v) { return $v !== ''; });
+eq(array_values($bs_m),   array('95'),   'mixed: one bootstrap value captured');
+eq(array_values($post_m), array('0.98'), 'mixed: one posterior value captured');
+
 //-----------------------------------------------------------------------------
 
 echo "\n$PASS passed, $FAIL failed\n";

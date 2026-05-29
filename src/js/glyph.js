@@ -69,22 +69,50 @@ function buildGlyph(tree, nodeId, kind, height)
 		// Full vertical bar at own x — continues this node's bar through its own row.
 		parts.push('<path d="M ' + x + ' 0 ' + x + ' ' + height + '"/>');
 		parts.push('<circle class="g-circle" cx="' + x + '" cy="' + mid + '" r="3"/>');
+
+		var support = composeSupport(tree, nodeId);
+		var labelX  = x + 6;
+		if (support !== '')
+		{
+			parts.push('<text class="g-support" x="' + (x + 8) + '" y="' + mid + '">' + escapeXml(support) + '</text>');
+			labelX = x + 8 + support.length * 5.5 + 4;
+		}
 		if (label)
 		{
-			parts.push('<text class="g-internal" x="' + (x + 6) + '" y="' + mid + '">' + escapeXml(label) + '</text>');
+			parts.push('<text class="g-internal" x="' + labelX + '" y="' + mid + '">' + escapeXml(label) + '</text>');
 		}
 	}
 	else if (kind === 'closed')
 	{
 		parts.push('<polygon class="g-tri" points="' + x + ',' + mid + ' ' + maxX + ',0 ' + maxX + ',' + height + '"/>');
+
+		var support2 = composeSupport(tree, nodeId);
+		var labelX2  = maxX + 6;
+		if (support2 !== '')
+		{
+			parts.push('<text class="g-support" x="' + (maxX + 6) + '" y="' + mid + '">' + escapeXml(support2) + '</text>');
+			labelX2 = maxX + 6 + support2.length * 5.5 + 4;
+		}
 		if (label)
 		{
-			parts.push('<text class="g-closed" x="' + (maxX + 6) + '" y="' + mid + '">' + escapeXml(label) + '</text>');
+			parts.push('<text class="g-closed" x="' + labelX2 + '" y="' + mid + '">' + escapeXml(label) + '</text>');
 		}
 	}
 
 	var W = leftGap + GLYPH_TREE_PX + GLYPH_LABEL_PX;
 	return '<svg width="' + W + '" height="' + height + '" xmlns="http://www.w3.org/2000/svg">' + parts.join('') + '</svg>';
+}
+
+// Format the node's support values for display.  Bootstrap and posterior may
+// each be present or absent; both present become "B/P".
+function composeSupport(tree, id)
+{
+	var b = (tree.bootstrap && tree.bootstrap[id]) || '';
+	var p = (tree.posterior && tree.posterior[id]) || '';
+	if (b !== '' && p !== '') { return b + '/' + p; }
+	if (b !== '')             { return b; }
+	if (p !== '')             { return p; }
+	return '';
 }
 
 function escapeXml(s)

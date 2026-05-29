@@ -222,11 +222,14 @@ function build_chain($t, $children)
 }
 
 //-----------------------------------------------------------------------------
-// Strip Newick comments: `[...]` blocks may appear anywhere whitespace is
-// allowed (Newick 8:45).  PAUP nests them, so we count depth.  Brackets
-// inside single-quoted labels are part of the label and kept verbatim.
-// Doubled quotes `''` inside a quoted label are the escape for a single
-// quote — they don't end the quoted span.
+// Strip ordinary Newick comments: `[...]` blocks may appear anywhere
+// whitespace is allowed (Newick 8:45).  PAUP nests them, so we count depth.
+// Brackets inside single-quoted labels are part of the label and kept
+// verbatim; doubled `''` inside a quoted label is the escape for a single
+// quote and doesn't end the quoted span.
+//
+// `[&...]` BEAST-style metacomments are passed through unchanged — they're
+// extracted by the parser's Scanner and attached to the right node.
 //-----------------------------------------------------------------------------
 
 function strip_newick_comments($newick)
@@ -260,6 +263,25 @@ function strip_newick_comments($newick)
 		{
 			$in_q = true;
 			$out .= $c;
+			continue;
+		}
+
+		if ($c === '[' && $depth === 0)
+		{
+			// Top-level `[`.  If it's a `[&...]` metacomment, pass it through;
+			// otherwise begin stripping (and count depth for nested cases).
+			if ($i + 1 < $n && $newick[$i + 1] === '&')
+			{
+				$end = $i + 1;
+				while ($end < $n && $newick[$end] !== ']')
+				{
+					$end++;
+				}
+				$out .= substr($newick, $i, $end - $i + 1);
+				$i = $end;
+				continue;
+			}
+			$depth++;
 			continue;
 		}
 
@@ -458,13 +480,15 @@ function build_arrays($t, $order_to_node, $crossings_by_order)
 {
 	$N = $t->num_nodes;
 
-	$labels  = array_fill(0, $N, '');
-	$parent  = array_fill(0, $N, -1);
-	$x       = array_fill(0, $N, 0);
-	$max_x   = array_fill(0, $N, 0);
-	$style   = array_fill(0, $N, 1);   // 1 = root / no half-bar
-	$child_l = array_fill(0, $N, -1);
-	$child_r = array_fill(0, $N, -1);
+	$labels    = array_fill(0, $N, '');
+	$parent    = array_fill(0, $N, -1);
+	$x         = array_fill(0, $N, 0);
+	$max_x     = array_fill(0, $N, 0);
+	$style     = array_fill(0, $N, 1);   // 1 = root / no half-bar
+	$child_l   = array_fill(0, $N, -1);
+	$child_r   = array_fill(0, $N, -1);
+	$bootstrap = array_fill(0, $N, '');
+	$posterior = array_fill(0, $N, '');
 
 	$it = new NodeIterator($t->GetRoot());
 	$q = $it->Begin();
@@ -476,6 +500,12 @@ function build_arrays($t, $order_to_node, $crossings_by_order)
 		$xy = $q->GetAttribute('xy');
 		$x[$id]     = isset($xy['x']) ? (float) $xy['x'] : 0;
 		$max_x[$id] = (float) $q->GetAttribute('max_x');
+
+		$b = $q->GetAttribute('meta_bootstrap');
+		if ($b !== null && $b !== '') { $bootstrap[$id] = $b; }
+
+		$p = $q->GetAttribute('meta_posterior');
+		if ($p !== null && $p !== '') { $posterior[$id] = $p; }
 
 		$anc = $q->GetAncestor();
 		if ($anc != null)
@@ -520,7 +550,7 @@ function build_arrays($t, $order_to_node, $crossings_by_order)
 		$crossings[$node_id] = $list;
 	}
 
-	return array($labels, $parent, $x, $max_x, $style, $inorder, $child_l, $child_r, $crossings);
+	return array($labels, $parent, $x, $max_x, $style, $inorder, $child_l, $child_r, $crossings, $bootstrap, $posterior);
 }
 
 //-----------------------------------------------------------------------------
@@ -563,7 +593,7 @@ function build_v1_json($newick)
 	$initial_size = 9;
 	list($first_zoom, $zoom_levels) = compute_first_zoom($t, $initial_size);
 
-	list($labels, $parent, $x, $max_x, $style, $inorder, $child_l, $child_r, $crossings)
+	list($labels, $parent, $x, $max_x, $style, $inorder, $child_l, $child_r, $crossings, $bootstrap, $posterior)
 		= build_arrays($t, $order_to_node, $crossings_by_order);
 
 	$id_str = substr(hash('sha256', $newick), 0, 12);
@@ -589,6 +619,8 @@ function build_v1_json($newick)
 		'child_l'    => $child_l,
 		'child_r'    => $child_r,
 		'crossings'  => $crossings,
+		'bootstrap'  => $bootstrap,
+		'posterior'  => $posterior,
 	);
 }
 

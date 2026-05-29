@@ -79,6 +79,7 @@ class Scanner
 	public $str = '';
 	public $token = TokenTypes::None;
 	public $buffer = '';
+	public $pendingMeta = '';   // BEAST [&key=val,...] content waiting for the parser to attach
 	
 	//------------------------------------------------------------------------------------
 	function __construct($str)
@@ -205,13 +206,22 @@ class Scanner
 	function ParseComment()
 	{
 		$this->buffer = '';
-		
+
 		while ((substr($this->str, $this->pos, 1) != ']') && ($this->pos < strlen($this->str)))
 		{
 			$this->buffer .= substr($this->str, $this->pos, 1);
 			$this->pos++;
 		}
 		$this->buffer .= substr($this->str, $this->pos, 1);
+
+		// BEAST-style metacomments start with `[&...`.  Save the content
+		// (without the surrounding brackets) for the parser to attach to the
+		// current node on the next iteration of its state loop.
+		$content = substr($this->buffer, 1, -1);
+		if (strlen($content) > 0 && $content[0] === '&')
+		{
+			$this->pendingMeta = $content;
+		}
 	}
 
 	//------------------------------------------------------------------------------------
@@ -371,6 +381,35 @@ class Scanner
 }
 
 //----------------------------------------------------------------------------------------
+// Parse a BEAST-style metacomment "&key=val,key=val,..." and stash each pair
+// on the node as a meta_<key> attribute.  NHX (which uses `:` as separator,
+// not `,`) is not handled — store the whole content under meta_raw so it's
+// at least preserved.
+function apply_metacomment($node, $content)
+{
+	$content = ltrim($content, '&');
+
+	// NHX format ([&&NHX:S=human:E=1.1.1.1]): the second & is gone, content
+	// now starts with "NHX:".  We don't parse it for now — preserve raw.
+	if (strpos($content, 'NHX:') === 0)
+	{
+		$node->SetAttribute('meta_raw', $content);
+		return;
+	}
+
+	foreach (explode(',', $content) as $pair)
+	{
+		$eq = strpos($pair, '=');
+		if ($eq === false) { continue; }
+		$key = trim(substr($pair, 0, $eq));
+		$val = trim(substr($pair, $eq + 1));
+		if ($key !== '')
+		{
+			$node->SetAttribute('meta_' . $key, $val);
+		}
+	}
+}
+
 function parse_newick($newick)
 {
 	// read a tree
@@ -389,9 +428,16 @@ function parse_newick($newick)
 
 	while ($state != 99)
 	{
-		//echo "[" . __LINE__ . "] state=$state\n";
-		//echo "[" . __LINE__ . "] $token " . $scanner->buffer . "\n";
-	
+		// Attach any metacomment the scanner picked up during the last GetToken
+		// to whatever node is current right now.  Works because metacomments
+		// always appear after a node-finalising token (`)`, label, branch
+		// length) — $curnode at this point is the node that was just closed.
+		if ($scanner->pendingMeta !== '')
+		{
+			apply_metacomment($curnode, $scanner->pendingMeta);
+			$scanner->pendingMeta = '';
+		}
+
 		switch ($state)
 		{
 			case 0: // getname
