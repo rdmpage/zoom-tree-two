@@ -49,10 +49,15 @@ function write_labels_main($argv)
 		exit(1);
 	}
 
-	$newick = @file_get_contents($input);
+	$newick = read_tree_newick($input);   // sniffs NEXUS vs Newick
 	if ($newick === false)
 	{
 		fwrite(STDERR, "write_labels.php: cannot read $input\n");
+		exit(1);
+	}
+	if ($newick === null)
+	{
+		fwrite(STDERR, "write_labels.php: no tree found in $input\n");
 		exit(1);
 	}
 

@@ -12,6 +12,7 @@ require_once __DIR__ . '/src/php/tree.php';
 require_once __DIR__ . '/src/php/node_iterator.php';
 require_once __DIR__ . '/src/php/inorder_iterator.php';
 require_once __DIR__ . '/src/php/tree-parse.php';
+require_once __DIR__ . '/src/php/read-tree.php';   // NEXUS/Newick sniffing
 require_once __DIR__ . '/src/php/tree-order.php';
 require_once __DIR__ . '/src/php/utils.php';
 require_once __DIR__ . '/src/php/pq.php';
@@ -25,10 +26,15 @@ function read_newick($argv)
 	if (count($argv) >= 2)
 	{
 		$path = $argv[1];
-		$s = @file_get_contents($path);
+		$s = read_tree_newick($path);   // sniffs NEXUS vs Newick
 		if ($s === false)
 		{
 			fwrite(STDERR, "build.php: cannot read $path\n");
+			exit(1);
+		}
+		if ($s === null)
+		{
+			fwrite(STDERR, "build.php: no tree found in $path\n");
 			exit(1);
 		}
 		return $s;

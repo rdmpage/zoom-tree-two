@@ -1,0 +1,24 @@
+#NEXUS 
+Begin trees;  
+Translate
+1 'FJ559181 Gephyromantis blanci voucher ZCMV 5240 16S ribosomal RNA gene, partial sequence; mitochondrial',
+2 'AY848330 Gephyromantis cf. klemmeri MV-2005 voucher 2002_692 16S ribosomal RNA gene, partial sequence; mitochondrial',
+3 'AY848304 Gephyromantis blanci voucher ZCMV123_Ve12 16S ribosomal RNA gene, partial sequence; mitochondrial',
+4 'AY848324 Gephyromantis blanci voucher 2002_2165 16S ribosomal RNA gene, partial sequence; mitochondrial',
+5 'FJ559183 Gephyromantis aff. blanci 6 MV-2009 voucher ZCMV 5493 16S ribosomal RNA gene, partial sequence; mitochondrial',
+6 'AY848329 Gephyromantis cf. klemmeri MV-2005 voucher FA_m11 16S ribosomal RNA gene, partial sequence; mitochondrial',
+7 'FJ559186 Gephyromantis cf. ''decaryi'' 9 MV-2009 voucher ZCMV 5223 16S ribosomal RNA gene, partial sequence; mitochondrial',
+8 'AY848332 Gephyromantis decaryi voucher 2002_170 16S ribosomal RNA gene, partial sequence; mitochondrial',
+9 'FJ559196 Gephyromantis sp. 25 MV-2009 16S ribosomal RNA gene, partial sequence; mitochondrial',
+10 'AY848337 Gephyromantis enki voucher 2002_496 16S ribosomal RNA gene, partial sequence; mitochondrial',
+11 'AY848307 Gephyromantis enki voucher ZCMV122_Ve11 16S ribosomal RNA gene, partial sequence; mitochondrial',
+12 'FJ559170 Gephyromantis leucocephalus voucher ZCMV 5440 16S ribosomal RNA gene, partial sequence; mitochondrial',
+13 'FJ559185 Gephyromantis sp. 8 MV-2009 16S ribosomal RNA gene, partial sequence; mitochondrial',
+14 'AY848336 Gephyromantis enki voucher 2002_281 16S ribosomal RNA gene, partial sequence; mitochondrial',
+15 'AY848335 Gephyromantis enki voucher 2002_213 16S ribosomal RNA gene, partial sequence; mitochondrial',
+16 'AY848334 Gephyromantis enki voucher 2002_197 16S ribosomal RNA gene, partial sequence; mitochondrial',
+17 'FJ559195 Gephyromantis sp. 24 MV-2009 16S ribosomal RNA gene, partial sequence; mitochondrial',
+18 'FJ559171 Gephyromantis leucocephalus 16S ribosomal RNA gene, partial sequence; mitochondrial',
+19 'AY848325 Gephyromantis boulengeri voucher 81 16S ribosomal RNA gene, partial sequence; mitochondrial'
+;
+tree PAUP_1 = [&R] (((((1:0,2:0):0,3:0):0.017219,(4:0.017338,(10:0.000679,(11:0.000535,(14:0,(15:0,16:0):0):0.001477):0.000595):0.019452):0.015589):0.002633,(((5:0.003562,12:0.010551):0.004215,18:0.010031):0.004492,((7:0.001656,8:0.002368):0.009739,13:0.010382):0.004810):0.017313):0,((6:0.003873,9:0.006252):0.011130,(17:0,19:0):0.027249):0.012834);End;

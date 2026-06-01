@@ -70,10 +70,15 @@ function read_labels_main($argv)
 
 	$rows = read_mapping($mapping_path);
 
-	$newick = @file_get_contents($tree_path);
+	$newick = read_tree_newick($tree_path);   // sniffs NEXUS vs Newick
 	if ($newick === false)
 	{
 		fwrite(STDERR, "read_labels.php: cannot read $tree_path\n");
+		exit(1);
+	}
+	if ($newick === null)
+	{
+		fwrite(STDERR, "read_labels.php: no tree found in $tree_path\n");
 		exit(1);
 	}
 

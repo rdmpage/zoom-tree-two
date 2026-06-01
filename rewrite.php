@@ -98,10 +98,15 @@ function rewrite_main($argv)
 		exit(1);
 	}
 
-	$newick = @file_get_contents($input);
+	$newick = read_tree_newick($input);   // sniffs NEXUS vs Newick
 	if ($newick === false)
 	{
 		fwrite(STDERR, "rewrite.php: cannot read $input\n");
+		exit(1);
+	}
+	if ($newick === null)
+	{
+		fwrite(STDERR, "rewrite.php: no tree found in $input\n");
 		exit(1);
 	}
 
