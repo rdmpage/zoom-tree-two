@@ -1,14 +1,14 @@
 <?php
 
 // write_labels.php — emit every non-empty label in the tree, one per line,
-// sorted and de-duplicated.  Companion to read_labels.php.
+// sorted and de-duplicated.  Companion to label_lineage.php.
 //
 //   php write_labels.php tree.nwk    > labels.txt
 //   cat tree.nwk | php write_labels.php
 //
-// Leaves and internal nodes are both included.  Use the output as the input
-// to a tree-specific transform script that produces the
-// (original\tcleaned\tlineage) mapping consumed by read_labels.php.
+// Leaves and internal nodes are both included.  Use the output as a starting
+// point for an explicit label TSV (original_label / new_label / … / lineage)
+// that label_lineage.php applies to the tree.
 
 require_once __DIR__ . '/src/php/node.php';
 require_once __DIR__ . '/src/php/tree.php';

@@ -24,12 +24,12 @@
 // Order:  rename first, then lineage labelling.  Bootstrap / posterior
 // metacomments survive the round trip.
 
-require_once __DIR__ . '/src/php/node.php';
-require_once __DIR__ . '/src/php/tree.php';
-require_once __DIR__ . '/src/php/node_iterator.php';
-require_once __DIR__ . '/src/php/tree-parse.php';
-require_once __DIR__ . '/build.php';      // strip_newick_comments
-require_once __DIR__ . '/rewrite.php';    // emit_newick
+require_once __DIR__ . '/../src/php/node.php';
+require_once __DIR__ . '/../src/php/tree.php';
+require_once __DIR__ . '/../src/php/node_iterator.php';
+require_once __DIR__ . '/../src/php/tree-parse.php';
+require_once __DIR__ . '/../build.php';      // strip_newick_comments
+require_once __DIR__ . '/../rewrite.php';    // emit_newick
 
 function read_labels_main($argv)
 {

@@ -11,10 +11,15 @@ and `transform_taxhierarchy.php` each derived a label/lineage mapping by
 convention parser, and the guessing was the fragile part.
 
 We've shelved them in favour of an **explicit labelling data file**: author a
-TSV (e.g. `original_label`/`new_label`/…/`lineage`) for the tree and apply it
-directly.  The lineage is stated, not inferred.  See `label_lineage.php`
-(and `read_labels.php`) in the project root, and PLAN.md for the labelling
-workflows.
+TSV (`original_label`/`new_label`/…/`lineage`) for the tree and apply it
+directly with `label_lineage.php`.  The lineage is stated, not inferred.
+
+`read_labels.php` is shelved here too: it was the other explicit-TSV labeller
+(`original`/`cleaned`/`lineage`, per-taxon LCA with sibling-aware monophyly),
+but it mangles rank prefixes (`f__…`) on output and doesn't feed the colour
+step, so `label_lineage.php` is the single canonical lineage labeller now. Its
+`require` paths were rewritten to `../` so it still runs from `attic/`. See
+PLAN.md for the labelling workflows.
 
 ## v1 labelling — superseded by write/transform/read
 
