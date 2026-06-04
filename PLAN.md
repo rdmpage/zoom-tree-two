@@ -295,9 +295,11 @@ To do, roughly in priority order:
 
 - **Colour options (UI + build params).** The prototype hard-codes one scheme.
   Want user-selectable:
-  - *Taxonomic level / hue cap* — currently `compute_node_colors($t, 2)`
-    (2 = family). Should be a per-tree choice; the right cap differs by tree
-    (a barcoding tree wants genus/species hues; a broad tree wants family).
+  - *Taxonomic level / hue cap* — now a build param
+    `build_v1_json($newick, $color_cap = 3)` (cap = NESTING depth, not rank, so
+    it works on rank-free trees too). The right cap differs by tree (a
+    barcoding tree wants genus/species hues; a broad tree wants family), so it
+    likely belongs in a per-tree config rather than a global default.
   - *Colour scheme* — light vs dark background tuning (dark mode looks best),
     additive vs subtractive depth, hue range / rotation, and at least one
     CVD-safe alternative (Tree Colors are not colour-blind-safe — the paper
@@ -312,6 +314,22 @@ To do, roughly in priority order:
 - **Colour by a second variable** — the paper notes the colour channel can
   carry a non-taxonomic attribute (support, a trait) instead of/over the
   classification. Possible later mode.
+- **Colour quality is downstream of labelling structure.** The colour scheme
+  exploits how internal labels NEST, so a tree with cleanly nested labels
+  colours far better than one with a flat/fragmented hierarchy:
+  - *Reptile tree* (`12862_…_labelled`) — hand-curated nested labels → one
+    root clade (Squamata) over 7 crisp major-clade arcs → genuinely
+    hierarchical colour.
+  - *Trichoptera* (auto-labelled by `label_lineage.php`) — 554 clades attach
+    directly under the order (36 families **+ 160 orphan genera + 358 orphan
+    species**, a side-effect of fragmenting paraphyletic taxa), so the wheel
+    splits 554 ways and reads rainbow; cap barely changes the big picture.
+  So there are two axes per tree: *config* (cap/scheme) and *data quality*
+  (how well the lineage authoring nests). Cleaner colour may need the lineage
+  TSV to nest every taxon under its parent, or accept the rainbow.
+- **Per-tree config files.** cap/scheme/etc. (and maybe labelling choices)
+  likely want a small per-tree config rather than global defaults baked at
+  build time. Sketch the format when defaults stop sufficing.
 
 ## What this plan does *not* yet sketch
 
