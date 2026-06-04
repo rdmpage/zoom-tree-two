@@ -7,12 +7,21 @@
 //
 // Output: trees/<id>.json, where id = first 12 hex chars of sha256(newick).
 
+// Large phylogenies (tens of thousands of nodes) need more than PHP's 128M
+// default — the in-memory tree plus the per-node data arrays run ~130M+ for a
+// 34k-node tree.  Raise the ceiling so build "just works" on big inputs.
+if (((int) (ini_get('memory_limit'))) < 1024 && ini_get('memory_limit') !== '-1')
+{
+	ini_set('memory_limit', '1024M');
+}
+
 require_once __DIR__ . '/src/php/node.php';
 require_once __DIR__ . '/src/php/tree.php';
 require_once __DIR__ . '/src/php/node_iterator.php';
 require_once __DIR__ . '/src/php/inorder_iterator.php';
 require_once __DIR__ . '/src/php/tree-parse.php';
 require_once __DIR__ . '/src/php/read-tree.php';   // NEXUS/Newick sniffing
+require_once __DIR__ . '/src/php/tree-colors.php';  // Tree Colors over the taxonomy
 require_once __DIR__ . '/src/php/tree-order.php';
 require_once __DIR__ . '/src/php/utils.php';
 require_once __DIR__ . '/src/php/pq.php';
@@ -602,6 +611,10 @@ function build_v1_json($newick)
 	list($labels, $parent, $x, $max_x, $style, $inorder, $child_l, $child_r, $crossings, $bootstrap, $posterior)
 		= build_arrays($t, $order_to_node, $crossings_by_order);
 
+	// Tree Colors over the taxonomy implied by the internal labels (hue capped
+	// at family by default).  All '' if the tree carries no classification.
+	$color = compute_node_colors($t, 2);
+
 	$id_str = substr(hash('sha256', $newick), 0, 12);
 
 	return array(
@@ -627,6 +640,7 @@ function build_v1_json($newick)
 		'crossings'  => $crossings,
 		'bootstrap'  => $bootstrap,
 		'posterior'  => $posterior,
+		'color'      => $color,
 	);
 }
 

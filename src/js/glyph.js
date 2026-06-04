@@ -23,6 +23,11 @@ function buildGlyph(tree, nodeId, kind, height)
 	var style  = tree.style[nodeId];
 	var mid    = height / 2;
 
+	// Tree Colors tint for this node's markers (and a darker variant for its
+	// label text).  Empty string = no classification → fall back to CSS ink.
+	var color  = (tree.color && tree.color[nodeId]) || '';
+	var inkCol = color ? darkenHex(color, 0.65) : '';
+
 	// Left margin = one row-height, so vertical lines off the root are visible.
 	var leftGap = tree.config.row_height_open;
 	var scale   = GLYPH_TREE_PX / tree.config.tree_width;
@@ -61,14 +66,19 @@ function buildGlyph(tree, nodeId, kind, height)
 	// The node itself
 	if (kind === 'leaf')
 	{
-		parts.push('<circle class="g-dot" cx="' + x + '" cy="' + mid + '" r="2.5"/>');
-		parts.push('<text class="g-label" x="' + (x + 5) + '" y="' + mid + '">' + escapeXml(label || ('#' + nodeId)) + '</text>');
+		// Use inline style (not a presentation attribute) so it overrides the
+		// class-based CSS fills in viewer.html.
+		var dotFill = color ? ' style="fill:' + color + '"' : '';
+		var labFill = inkCol ? ' style="fill:' + inkCol + '"' : '';
+		parts.push('<circle class="g-dot" cx="' + x + '" cy="' + mid + '" r="2.5"' + dotFill + '/>');
+		parts.push('<text class="g-label" x="' + (x + 5) + '" y="' + mid + '"' + labFill + '>' + escapeXml(label || ('#' + nodeId)) + '</text>');
 	}
 	else if (kind === 'open')
 	{
 		// Full vertical bar at own x — continues this node's bar through its own row.
 		parts.push('<path d="M ' + x + ' 0 ' + x + ' ' + height + '"/>');
-		parts.push('<circle class="g-circle" cx="' + x + '" cy="' + mid + '" r="3"/>');
+		var circStroke = color ? ' style="stroke:' + color + '"' : '';
+		parts.push('<circle class="g-circle" cx="' + x + '" cy="' + mid + '" r="3"' + circStroke + '/>');
 
 		var support = composeSupport(tree, nodeId);
 		var labelX  = x + 6;
@@ -79,12 +89,14 @@ function buildGlyph(tree, nodeId, kind, height)
 		}
 		if (label)
 		{
-			parts.push('<text class="g-internal" x="' + labelX + '" y="' + mid + '">' + escapeXml(label) + '</text>');
+			var intFill = inkCol ? ' style="fill:' + inkCol + '"' : '';
+			parts.push('<text class="g-internal" x="' + labelX + '" y="' + mid + '"' + intFill + '>' + escapeXml(label) + '</text>');
 		}
 	}
 	else if (kind === 'closed')
 	{
-		parts.push('<polygon class="g-tri" points="' + x + ',' + mid + ' ' + maxX + ',0 ' + maxX + ',' + height + '"/>');
+		var triFill = color ? ' style="fill:' + color + ';stroke:' + inkCol + '"' : '';
+		parts.push('<polygon class="g-tri" points="' + x + ',' + mid + ' ' + maxX + ',0 ' + maxX + ',' + height + '"' + triFill + '/>');
 
 		var support2 = composeSupport(tree, nodeId);
 		var labelX2  = maxX + 6;
@@ -95,7 +107,8 @@ function buildGlyph(tree, nodeId, kind, height)
 		}
 		if (label)
 		{
-			parts.push('<text class="g-closed" x="' + labelX2 + '" y="' + mid + '">' + escapeXml(label) + '</text>');
+			var clFill = inkCol ? ' style="fill:' + inkCol + '"' : '';
+			parts.push('<text class="g-closed" x="' + labelX2 + '" y="' + mid + '"' + clFill + '>' + escapeXml(label) + '</text>');
 		}
 	}
 
@@ -113,6 +126,18 @@ function composeSupport(tree, id)
 	if (b !== '')             { return b; }
 	if (p !== '')             { return p; }
 	return '';
+}
+
+// Darken a "#rrggbb" toward black by factor f (0..1) for legible label text
+// over white.  Returns '' unchanged for the empty (no-colour) case.
+function darkenHex(hex, f)
+{
+	if (!hex || hex.charAt(0) !== '#' || hex.length !== 7) { return hex; }
+	var r = Math.round(parseInt(hex.substr(1, 2), 16) * f);
+	var g = Math.round(parseInt(hex.substr(3, 2), 16) * f);
+	var b = Math.round(parseInt(hex.substr(5, 2), 16) * f);
+	var h = function (v) { return ('0' + v.toString(16)).slice(-2); };
+	return '#' + h(r) + h(g) + h(b);
 }
 
 function escapeXml(s)
