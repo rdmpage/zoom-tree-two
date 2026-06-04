@@ -15,6 +15,12 @@ if (((int) (ini_get('memory_limit'))) < 1024 && ini_get('memory_limit') !== '-1'
 	ini_set('memory_limit', '1024M');
 }
 
+// Hard upper bound on tree size (PLAN.md §Scalability).  Past this the JSON
+// gets unwieldy for the browser and `crossings[]` risks O(N^2) on deep trees,
+// so we reject with a clear error rather than swap/serve a giant file.
+// Overridable (define before including) for tests or deliberate large runs.
+if (!defined('BUILD_MAX_NODES')) { define('BUILD_MAX_NODES', 200000); }
+
 require_once __DIR__ . '/src/php/node.php';
 require_once __DIR__ . '/src/php/tree.php';
 require_once __DIR__ . '/src/php/node_iterator.php';
@@ -582,6 +588,14 @@ function build_v1_json($newick)
 	renumber($t);           // contiguous ids 0..N-1, root = 0
 	require_binary($t);     // safety net
 
+	// Fail fast before the expensive crossings / array / JSON passes.
+	if ($t->num_nodes > BUILD_MAX_NODES)
+	{
+		throw new RuntimeException(sprintf(
+			'tree too large: %d nodes (limit %d). Increase BUILD_MAX_NODES if you really mean it, but the JSON will be heavy for the browser.',
+			$t->num_nodes, BUILD_MAX_NODES));
+	}
+
 	cladogram_to_branch_lengths($t);  // no-op if branch lengths already present
 
 	$t->BuildWeights($t->GetRoot());
@@ -657,7 +671,15 @@ if (PHP_SAPI === 'cli' && realpath($_SERVER['SCRIPT_FILENAME']) === __FILE__)
 		exit(1);
 	}
 
-	$out = build_v1_json($newick);
+	try
+	{
+		$out = build_v1_json($newick);
+	}
+	catch (Exception $e)
+	{
+		fwrite(STDERR, 'build.php: ' . $e->getMessage() . "\n");
+		exit(1);
+	}
 
 	$out_dir = __DIR__ . '/trees';
 	if (!is_dir($out_dir))
