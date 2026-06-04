@@ -172,7 +172,12 @@ function compute_node_colors($t, $cap_depth = 2)
 		$lab = $q->GetLabel();
 		$lab = ($lab === null) ? '' : $lab;
 		$labelStr[$id] = $lab;
-		$named[$id] = ($lab !== '' && preg_match('/^[A-Za-z]+__/', $lab) === 1);
+		// A "taxon" is any internal node carrying a non-empty, non-numeric
+		// label.  This covers rank-prefixed labels ("f__Family") and plain
+		// clade names ("Squamata", "Viperidae") alike — the hierarchy comes
+		// from how they NEST, not from ranks — while ignoring leaves and
+		// numeric support values.
+		$named[$id] = (!$q->IsLeaf() && $lab !== '' && !is_numeric($lab));
 
 		$nearestNamed[$id] = ($pid === -1) ? -1 : ($named[$pid] ? $pid : $nearestNamed[$pid]);
 		$q = $it->Next();

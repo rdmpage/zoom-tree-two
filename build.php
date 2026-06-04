@@ -579,7 +579,7 @@ function build_arrays($t, $order_to_node, $crossings_by_order)
 // CLI main below and by test.php.
 //-----------------------------------------------------------------------------
 
-function build_v1_json($newick)
+function build_v1_json($newick, $color_cap = 3)
 {
 	$newick = strip_newick_comments($newick);  // [...] anywhere whitespace is allowed
 	$t = parse_newick($newick);
@@ -626,8 +626,8 @@ function build_v1_json($newick)
 		= build_arrays($t, $order_to_node, $crossings_by_order);
 
 	// Tree Colors over the taxonomy implied by the internal labels (hue capped
-	// at family by default).  All '' if the tree carries no classification.
-	$color = compute_node_colors($t, 2);
+	// at nesting depth $color_cap).  All '' if the tree carries no classification.
+	$color = compute_node_colors($t, $color_cap);
 
 	$id_str = substr(hash('sha256', $newick), 0, 12);
 
