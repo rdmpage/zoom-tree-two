@@ -283,6 +283,36 @@ which we're explicitly punting on.
 5. **Tree size cap.** What's a reasonable upper bound? 10k? 50k? Affects
    whether we need an async upload pipeline at all.
 
+## Backlog (added since the original sketch)
+
+Done since this plan was written: NEXUS reading (sniffed vs Newick), TSV-driven
+internal-node labelling (`label_lineage.php`), and a **colour layer** — Tree
+Colors (Tennekes & de Jonge 2014) computed over the *taxonomy* implied by the
+internal labels and emitted as a per-node `color` in the JSON, tinting markers
+and labels in the viewer (`src/php/tree-colors.php`, `glyph.js`).
+
+To do, roughly in priority order:
+
+- **Colour options (UI + build params).** The prototype hard-codes one scheme.
+  Want user-selectable:
+  - *Taxonomic level / hue cap* — currently `compute_node_colors($t, 2)`
+    (2 = family). Should be a per-tree choice; the right cap differs by tree
+    (a barcoding tree wants genus/species hues; a broad tree wants family).
+  - *Colour scheme* — light vs dark background tuning (dark mode looks best),
+    additive vs subtractive depth, hue range / rotation, and at least one
+    CVD-safe alternative (Tree Colors are not colour-blind-safe — the paper
+    says so; the brackets gutter is the fallback cue for those users).
+  - *Tint scope* — markers+labels (current) vs also branch lines (full wash).
+  - *Backbone colour* — a single-order tree (e.g. Trichoptera) gives one
+    light-hued backbone; offer grey-above-cap instead.
+  These split into build-time params (baked into the JSON) and viewer-time
+  toggles (recompute in JS). Decide which belong where.
+- **Static brackets gutter** (see `brackets-design.md`) — the other "where am
+  I" cue; should share the clade colours.
+- **Colour by a second variable** — the paper notes the colour channel can
+  carry a non-taxonomic attribute (support, a trait) instead of/over the
+  classification. Possible later mode.
+
 ## What this plan does *not* yet sketch
 
 - Search-for-a-taxon / scroll-to-found-node. Easy to add — same `absoluteY`
