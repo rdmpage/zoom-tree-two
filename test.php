@@ -257,7 +257,65 @@ eq(format_label('with:colon'),                           "'with:colon'",        
 // (Removed: tests for read_labels.php and transform_taxhierarchy.php — both
 // moved to attic/.  Internal-node labelling now goes through label_lineage.php
 // with an explicit lineage TSV.  format_label() tests above stay (it lives in
-// rewrite.php).  TODO: add label_lineage.php tests here.)
+// rewrite.php).)
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
+// label_lineage.php — internal-node labelling by lineage intersection.
+//
+// Regression for the "Jera tricuspidata" leak: a single labelled leaf sister to
+// a HETEROGENEOUS clade must not propagate its lineage upward.  The old fold
+// rule ignored any child whose set was empty, conflating "no data" with
+// "genuinely mixed" — so a multi-genus sibling was skipped and the lone leaf's
+// lineage (species and all) leaked up across clades it doesn't span.  The fix
+// folds a child iff its subtree carries data, so a mixed clade correctly
+// collapses its ancestor's intersection to empty (no shared rank → no label).
+//-----------------------------------------------------------------------------
+
+require_once __DIR__ . '/label_lineage.php';   // CLI main is guarded; safe to include
+
+// Topology:
+//   root
+//   ├── (Cyclosemia_a, Cyclosemia_b)            <- monophyletic genus  => g__Cyclosemia
+//   └── (Jera_tricuspidata,                      <- lone labelled leaf
+//          (Arteurotia_x, Heterobathmia_y))      <- two genera => heterogeneous, no rank
+// Jera is a single leaf: it must label NOTHING internal.  The mixed clades
+// (root, the Jera clade, the Arteurotia+Heterobathmia clade) must stay blank.
+$lin_newick = '((Cyclosemia_a:1,Cyclosemia_b:1):1,' .
+              '(Jera_tricuspidata:1,(Arteurotia_x:1,Heterobathmia_y:1):1):1):1;';
+$lt = parse_newick(strip_newick_comments($lin_newick));
+
+$lineages = array(
+	'Cyclosemia a'      => array('lineage' => array('g__Cyclosemia',   's__Cyclosemia a'),      'display' => ''),
+	'Cyclosemia b'      => array('lineage' => array('g__Cyclosemia',   's__Cyclosemia b'),      'display' => ''),
+	'Jera tricuspidata' => array('lineage' => array('g__Jera',         's__Jera tricuspidata'), 'display' => ''),
+	'Arteurotia x'      => array('lineage' => array('g__Arteurotia',   's__Arteurotia x'),      'display' => ''),
+	'Heterobathmia y'   => array('lineage' => array('g__Heterobathmia','s__Heterobathmia y'),   'display' => ''),
+);
+
+label_internal_nodes_from_map($lt, $lineages);
+
+// Collect the labels that landed on internal nodes.
+$internal_labels = array();
+$lit = new NodeIterator($lt->GetRoot());
+for ($q = $lit->Begin(); $q != null; $q = $lit->Next())
+{
+	if (!$q->IsLeaf() && $q->GetLabel() !== '')
+	{
+		$internal_labels[] = $q->GetLabel();
+	}
+}
+sort($internal_labels);
+
+// The lone-leaf lineage must not have leaked: no species anywhere internal, and
+// no g__Jera (Jera is a single tip — it can label no clade).
+$internal_species = array_filter($internal_labels, function ($l) { return strpos($l, 's__') === 0; });
+eq(array_values($internal_species), array(), 'label_lineage: no species labels on internal nodes (Jera leak)');
+ok(!in_array('g__Jera', $internal_labels, true), 'label_lineage: lone-leaf genus g__Jera does not label any clade');
+
+// The genuinely monophyletic genus is the ONLY internal label, at its LCA.
+eq($internal_labels, array('g__Cyclosemia'), 'label_lineage: only the monophyletic genus is labelled, at its LCA');
+
 //-----------------------------------------------------------------------------
 
 //-----------------------------------------------------------------------------

@@ -151,6 +151,7 @@ function label_internal_nodes_from_map($t, $lineages)
 {
 	$classification = array();   // node id -> lineage array (shared so far)
 	$seen           = array();   // node id -> has an ancestor received any child set
+	$has_data       = array();   // node id -> subtree contains >=1 labelled leaf
 
 	$stats = array(
 		'leaves'            => 0,
@@ -178,6 +179,7 @@ function label_internal_nodes_from_map($t, $lineages)
 			{
 				$row = $lineages[$key];
 				$classification[$id] = $row['lineage'];
+				$has_data[$id] = true;   // this leaf constrains its ancestors
 				$stats['leaves_matched']++;
 
 				// Rename the leaf to its display label if one is given and it
@@ -200,28 +202,35 @@ function label_internal_nodes_from_map($t, $lineages)
 		$q = $it->Next();
 	}
 
-	// Pass 2: post-order fold each node's set up into its ancestor.  Empty
-	// child sets are ignored so they cannot collapse a clade's classification.
+	// Pass 2: post-order fold each node's set up into its ancestor.  A child is
+	// folded in iff its subtree carries data (has_data) -- NOT merely iff its set
+	// is non-empty.  The distinction matters:
+	//   * A child with NO data (an unlabelled leaf, or a subtree of them) is
+	//     ignored, so it can't wipe out a clade's classification.
+	//   * A child WITH data but an EMPTY set is a genuinely heterogeneous clade
+	//     (its leaves share no rank).  That emptiness is meaningful: intersect it
+	//     in so the ancestor collapses to no common rank too.  Skipping it (the
+	//     old `!empty($child)` test) let a single labelled sibling's lineage --
+	//     species and all -- leak up across multi-genus clades.
 	$q = $it->Begin();
 	while ($q != null)
 	{
 		$anc = $q->GetAncestor();
-		if ($anc)
+		$cid = $q->GetId();
+		if ($anc && !empty($has_data[$cid]))
 		{
-			$child = $classification[$q->GetId()];
-			if (!empty($child))
+			$child = $classification[$cid];
+			$aid = $anc->GetId();
+			if (empty($seen[$aid]))
 			{
-				$aid = $anc->GetId();
-				if (empty($seen[$aid]))
-				{
-					$classification[$aid] = $child;
-					$seen[$aid] = true;
-				}
-				else
-				{
-					$classification[$aid] = array_intersect($classification[$aid], $child);
-				}
+				$classification[$aid] = $child;
+				$seen[$aid] = true;
 			}
+			else
+			{
+				$classification[$aid] = array_intersect($classification[$aid], $child);
+			}
+			$has_data[$aid] = true;
 		}
 		$q = $it->Next();
 	}
