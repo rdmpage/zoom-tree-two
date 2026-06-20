@@ -122,6 +122,32 @@
 
 	.row.highlight    { background: #ffe680; transition: none; }
 
+	/* Clade-block layer (prototype) — painted behind the row glyphs. */
+	.block-layer
+	{
+		position: absolute;
+		top: 0; left: 0;
+		width: 100%; height: 100%;
+		pointer-events: none;
+	}
+	.clade-block
+	{
+		position: absolute;
+		left: 0; right: 0;
+		box-sizing: border-box;
+	}
+	.clade-name
+	{
+		position: absolute;
+		right: 12px;
+		transform: translateY(-50%);
+		white-space: nowrap;
+		font-weight: 400;
+		font-size: 15px;
+		color: rgba(20, 20, 20, 0.7);
+	}
+	#pages.blocks-hidden .block-layer { display: none; }
+
 	.row svg          { display: block; }
 	.row svg path     { stroke: #222; stroke-width: 1; fill: none; shape-rendering: crispEdges; }
 	.row svg .g-dot   { fill: #222; stroke: none; }
@@ -185,8 +211,10 @@
 					}
 				});
 
-				// Land on the largest zoom that still fits in the viewer.
-				viewer.zoom = viewer.pickInitialZoom();
+				// Land on the largest zoom that still fits in the viewer, unless
+				// an explicit ?z= override is given (dev/share convenience).
+				var zParam = parseInt(params.get('z'), 10);
+				viewer.zoom = isNaN(zParam) ? viewer.pickInitialZoom() : zParam;
 				viewer.render();
 
 				btnIn.addEventListener('click',  function () { viewer.setZoom(viewer.zoom + 1); });

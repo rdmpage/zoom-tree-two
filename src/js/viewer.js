@@ -6,6 +6,52 @@
 // same screen position.  All heights come from the JSON — we never measure
 // laid-out DOM on the zoom path.
 
+// --- Clade-block prototype (brackets-design.md, coloured) -------------------
+// A translucent region behind every "frontier" named clade (visible, with no
+// visible named descendant), carrying one sticky-centred name.  Keeps a clade
+// legible as it fragments into unnamed sub-triangles under zoom.  Toggle with
+// the 'b' key.  Pure client-side: no JSON change.
+var BLOCKS_ENABLED = true;
+
+// Left padding (px) between a block's left edge and its clade's MRCA node.
+var BLOCK_LEFT_PAD = 6;
+
+// Light categorical palette (tab20-ish), cycled along the frontier so adjacent
+// blocks differ.  Block fill is this at low alpha; the name picks up a darker
+// ink so it reads over the tint.
+var CLADE_PALETTE = [
+	'#aec7e8', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5',
+	'#c49c94', '#f7b6d2', '#dbdb8d', '#9edae5', '#c7c7c7'
+];
+
+function hexToRgba(hex, a)
+{
+	var r = parseInt(hex.substr(1, 2), 16);
+	var g = parseInt(hex.substr(3, 2), 16);
+	var b = parseInt(hex.substr(5, 2), 16);
+	return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+}
+
+// Strip the rank prefix (g__/s__/f__/o__…) for display.
+function displayCladeName(lab)
+{
+	return lab ? lab.replace(/^[a-z]+__/, '') : '';
+}
+
+// First index i with arr[i] >= x  /  first index i with arr[i] > x.
+function lowerBound(arr, x)
+{
+	var lo = 0, hi = arr.length;
+	while (lo < hi) { var m = (lo + hi) >>> 1; if (arr[m] < x) { lo = m + 1; } else { hi = m; } }
+	return lo;
+}
+function upperBound(arr, x)
+{
+	var lo = 0, hi = arr.length;
+	while (lo < hi) { var m = (lo + hi) >>> 1; if (arr[m] <= x) { lo = m + 1; } else { hi = m; } }
+	return lo;
+}
+
 function PageViewer(opts)
 {
 	this.tree     = opts.tree;
@@ -19,6 +65,7 @@ function PageViewer(opts)
 
 PageViewer.prototype.render = function ()
 {
+	this.precomputeClades();
 	this.computeVisible();
 	this.buildPages();
 	this.setInitialScroll();
@@ -26,6 +73,177 @@ PageViewer.prototype.render = function ()
 	this.fillVisibleNow();
 	this.attachHandlers();
 	this.onChange(this);
+};
+
+// One-time: inorder position per node, the inorder interval each subtree spans
+// (for block extent), a preorder DFS order (for the frontier fold), and the
+// list of named node ids.  Uses only child pointers + inorder + labels.
+PageViewer.prototype.precomputeClades = function ()
+{
+	var tree = this.tree, n = tree.n;
+
+	var pos = new Array(n);                         // node id -> index in inorder
+	for (var k = 0; k < n; k++) { pos[tree.inorder[k]] = k; }
+
+	// Preorder DFS from root: parent always recorded before its children.
+	var order = new Array(n);
+	var oi = 0, stack = [0];
+	while (stack.length)
+	{
+		var id = stack.pop();
+		order[oi++] = id;
+		var cl = tree.child_l[id], cr = tree.child_r[id];
+		if (cr !== -1) { stack.push(cr); }
+		if (cl !== -1) { stack.push(cl); }
+	}
+
+	// Subtree inorder interval [lo, hi], folded children-before-parent (reverse
+	// preorder).  A monophyletic clade's leaves are contiguous in inorder, so
+	// [lo, hi] is exactly the clade.
+	var lo = new Array(n), hi = new Array(n);
+	for (var i = n - 1; i >= 0; i--)
+	{
+		var nid = order[i];
+		var a = tree.child_l[nid], b = tree.child_r[nid];
+		if (a === -1)
+		{
+			lo[nid] = hi[nid] = pos[nid];
+		}
+		else
+		{
+			lo[nid] = Math.min(pos[nid], lo[a], lo[b]);
+			hi[nid] = Math.max(pos[nid], hi[a], hi[b]);
+		}
+	}
+
+	// A node anchors a block iff it's an INTERNAL node carrying a real taxon
+	// label (not a leaf, not a leftover numeric support value).
+	var namedFlag = new Uint8Array(n);
+	var named = [];
+	for (var d = 0; d < n; d++)
+	{
+		if (tree.child_l[d] !== -1 && isCladeName(tree.labels[d]))
+		{
+			namedFlag[d] = 1;
+			named.push(d);
+		}
+	}
+
+	this.cladePos   = pos;
+	this.cladeLo    = lo;
+	this.cladeHi    = hi;
+	this.dfsOrder   = order;
+	this.namedIds   = named;
+	this.namedFlag  = namedFlag;
+};
+
+// Frontier at the current zoom: named nodes that are visible and have no
+// visible named descendant (brackets-design.md §"frontier rule").  O(N) fold.
+PageViewer.prototype.computeFrontier = function ()
+{
+	var tree = this.tree, z = this.zoom, n = tree.n;
+	var order = this.dfsOrder;
+
+	var nf = this.namedFlag;
+	var hasNamedDesc = new Uint8Array(n);
+	for (var i = n - 1; i >= 0; i--)
+	{
+		var id = order[i];
+		var cl = tree.child_l[id], cr = tree.child_r[id];
+		if (cl === -1) { continue; }
+		var h = 0;
+		if ((nf[cl] && tree.first_zoom[cl] <= z) || hasNamedDesc[cl]) { h = 1; }
+		if ((nf[cr] && tree.first_zoom[cr] <= z) || hasNamedDesc[cr]) { h = 1; }
+		hasNamedDesc[id] = h;
+	}
+
+	var front = [], named = this.namedIds;
+	for (var j = 0; j < named.length; j++)
+	{
+		var nid = named[j];
+		if (tree.first_zoom[nid] <= z && !hasNamedDesc[nid]) { front.push(nid); }
+	}
+	return front;
+};
+
+// Build the background block layer for the current zoom.  Inserted as the FIRST
+// child of #pages so it paints behind the row glyphs; recomputed every
+// buildPages.  Block extent comes from cumY (arithmetic, no DOM measurement).
+PageViewer.prototype.buildBlocks = function ()
+{
+	if (!BLOCKS_ENABLED) { return; }
+
+	var frontier = this.computeFrontier();
+	var lo = this.cladeLo, hi = this.cladeHi, pos = this.cladePos;
+
+	// inorder position of each visible row, in row order (== inorder order).
+	var vis = this.visibleIds;
+	var visPos = new Array(vis.length);
+	for (var i = 0; i < vis.length; i++) { visPos[i] = pos[vis[i]]; }
+
+	// Stable left-to-right (top-to-bottom) order so palette cycling lands on
+	// adjacent-different colours.
+	frontier.sort(function (p, q) { return lo[p] - lo[q]; });
+
+	// Same x->pixel mapping glyph.js uses, so the block's left edge lines up with
+	// the clade's MRCA node (with a little padding) — leaving the backbone bare.
+	var leftGap = this.tree.config.row_height_open;
+	var scale   = GLYPH_TREE_PX / this.tree.config.tree_width;
+
+	var html = [], blocks = [];
+	for (var f = 0; f < frontier.length; f++)
+	{
+		var id = frontier[f];
+		var a = lowerBound(visPos, lo[id]);
+		var b = upperBound(visPos, hi[id]) - 1;
+		if (b < a) { continue; }   // no visible rows (shouldn't happen for a frontier node)
+		// NB single-row blocks are KEPT: a collapsed named clade (closed triangle)
+		// carries its block + name too, so colour/label are continuous from
+		// collapsed through to fully open — the block just grows on zoom.
+
+		var top = this.paddingTop + this.cumY[a];
+		var bot = this.paddingTop + this.cumY[b + 1];
+		var left = Math.max(0, leftGap + this.tree.x[id] * scale - BLOCK_LEFT_PAD);
+		var col = CLADE_PALETTE[f % CLADE_PALETTE.length];
+		var disp = displayCladeName(this.tree.labels[id]);
+
+		html.push(
+			'<div class="clade-block" style="top:' + top + 'px;height:' + (bot - top) +
+			'px;left:' + left + 'px;background:' + hexToRgba(col, 0.33) + '">' +
+			'<div class="clade-name">' + escapeXml(disp) + '</div></div>');
+		blocks.push({ top: top, bot: bot });
+	}
+
+	var layer = document.createElement('div');
+	layer.className = 'block-layer';
+	layer.innerHTML = html.join('');
+	this.pagesEl.insertBefore(layer, this.pagesEl.firstChild);
+
+	var nameEls = layer.querySelectorAll('.clade-name');
+	for (var m = 0; m < blocks.length; m++) { blocks[m].nameEl = nameEls[m]; }
+
+	this.cladeBlocks = blocks;
+	this.positionCladeNames();
+};
+
+// Sticky-centre each block's name in the visible slice of its block, so the
+// clade label is always on screen while scrolling inside a tall clade.
+PageViewer.prototype.positionCladeNames = function ()
+{
+	if (!this.cladeBlocks) { return; }
+	var vTop = this.viewerEl.scrollTop;
+	var vBot = vTop + this.viewerEl.clientHeight;
+	var pad = 12;
+
+	for (var i = 0; i < this.cladeBlocks.length; i++)
+	{
+		var bk = this.cladeBlocks[i];
+		if (!bk.nameEl) { continue; }
+		var visTop = Math.max(bk.top, vTop + pad);
+		var visBot = Math.min(bk.bot, vBot - pad);
+		var center = (visBot > visTop) ? (visTop + visBot) / 2 : (bk.top + bk.bot) / 2;
+		bk.nameEl.style.top = (center - bk.top) + 'px';   // relative to clade-block
+	}
 };
 
 // First view: centre small trees, pin big trees just below the top buffer.
@@ -162,6 +380,8 @@ PageViewer.prototype.buildPages = function ()
 	this.pagesEl.style.paddingTop    = pad + 'px';
 	this.pagesEl.style.paddingBottom = pad + 'px';
 	this.pagesEl.style.height        = y + 'px';
+
+	this.buildBlocks();
 };
 
 // Screen-y (in scrollable coords) of the midpoint of the row holding `id`.
@@ -366,6 +586,7 @@ PageViewer.prototype.fillVisibleNow = function ()
 			this.fillPage(p);
 		}
 	}
+	this.positionCladeNames();
 };
 
 PageViewer.prototype.fillPage = function (p)
@@ -425,6 +646,15 @@ PageViewer.prototype.attachHandlers = function ()
 {
 	var self = this;
 
+	// Keep clade names sticky-centred as the user scrolls (rAF-throttled).
+	var ticking = false;
+	this.viewerEl.addEventListener('scroll', function ()
+	{
+		if (ticking) { return; }
+		ticking = true;
+		requestAnimationFrame(function () { self.positionCladeNames(); ticking = false; });
+	});
+
 	window.addEventListener('keydown', function (e)
 	{
 		var tag = (e.target && e.target.tagName) || '';
@@ -438,6 +668,12 @@ PageViewer.prototype.attachHandlers = function ()
 		else if (e.key === '-' || e.key === '_')
 		{
 			self.setZoom(self.zoom - 1);
+			e.preventDefault();
+		}
+		else if (e.key === 'b' || e.key === 'B')
+		{
+			// Toggle the block layer for before/after comparison.
+			self.pagesEl.classList.toggle('blocks-hidden');
 			e.preventDefault();
 		}
 	});

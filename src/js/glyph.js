@@ -16,6 +16,21 @@
 var GLYPH_TREE_PX  = 700;   // pixels for the tree drawing
 var GLYPH_LABEL_PX = 250;   // pixels reserved to the right for labels
 
+// A label is a clade NAME (vs a leftover numeric support value that the source
+// Newick carried on internal nodes and label_lineage didn't overwrite).  Used
+// to keep support strings out of the clade-block gutter and frontier.
+function isCladeName(lab)
+{
+	return !!lab && !/^[\d.]+$/.test(lab);
+}
+
+// When the clade-block layer is on, the block gutter is the single source of
+// truth for internal clade names — don't also draw them in-tree.
+function blocksOn()
+{
+	return typeof BLOCKS_ENABLED !== 'undefined' && BLOCKS_ENABLED;
+}
+
 function buildGlyph(tree, nodeId, kind, height)
 {
 	var label  = tree.labels[nodeId];
@@ -87,7 +102,7 @@ function buildGlyph(tree, nodeId, kind, height)
 			parts.push('<text class="g-support" x="' + (x + 8) + '" y="' + mid + '">' + escapeXml(support) + '</text>');
 			labelX = x + 8 + support.length * 5.5 + 4;
 		}
-		if (label)
+		if (label && !(blocksOn() && isCladeName(label)))
 		{
 			var intFill = inkCol ? ' style="fill:' + inkCol + '"' : '';
 			parts.push('<text class="g-internal" x="' + labelX + '" y="' + mid + '"' + intFill + '>' + escapeXml(label) + '</text>');
@@ -105,7 +120,7 @@ function buildGlyph(tree, nodeId, kind, height)
 			parts.push('<text class="g-support" x="' + (maxX + 6) + '" y="' + mid + '">' + escapeXml(support2) + '</text>');
 			labelX2 = maxX + 6 + support2.length * 5.5 + 4;
 		}
-		if (label)
+		if (label && !(blocksOn() && isCladeName(label)))
 		{
 			var clFill = inkCol ? ' style="fill:' + inkCol + '"' : '';
 			parts.push('<text class="g-closed" x="' + labelX2 + '" y="' + mid + '"' + clFill + '>' + escapeXml(label) + '</text>');
