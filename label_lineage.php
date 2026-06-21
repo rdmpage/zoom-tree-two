@@ -83,6 +83,24 @@ function emit_labelled_newick($node)
 
 	$s .= emit_label($node->GetLabel());
 
+	// Re-emit BEAST-style support metacomments the parser captured (e.g. from a
+	// prior `rewrite.php` pass that moved numeric internal labels into
+	// [&posterior=…]).  Without this they'd be silently dropped here and the
+	// support lost before build.php could pick it up.
+	$meta = array();
+	foreach (array('bootstrap', 'posterior') as $k)
+	{
+		$v = $node->GetAttribute('meta_' . $k);
+		if ($v !== null && $v !== '')
+		{
+			$meta[] = $k . '=' . $v;
+		}
+	}
+	if (!empty($meta))
+	{
+		$s .= '[&' . implode(',', $meta) . ']';
+	}
+
 	$bl = $node->GetAttribute('edge_length');
 	if ($bl !== null && $bl !== '')
 	{
