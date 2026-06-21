@@ -316,6 +316,15 @@ ok(!in_array('g__Jera', $internal_labels, true), 'label_lineage: lone-leaf genus
 // The genuinely monophyletic genus is the ONLY internal label, at its LCA.
 eq($internal_labels, array('g__Cyclosemia'), 'label_lineage: only the monophyletic genus is labelled, at its LCA');
 
+// emit_labelled_newick must re-emit support metacomments the parser captured,
+// so a rewrite.php pass (numeric internal labels -> [&posterior=…]) survives the
+// labelling step instead of being silently dropped.
+$meta_nwk = "((a:1,b:1)[&posterior=0.9]:1,(c:1,d:1)[&bootstrap=88]:1);";
+$mt = parse_newick(strip_newick_comments($meta_nwk));
+$emitted = emit_labelled_newick($mt->GetRoot()) . ";";
+ok(strpos($emitted, 'posterior=0.9') !== false, 'label_lineage: posterior metacomment survives the emitter');
+ok(strpos($emitted, 'bootstrap=88') !== false, 'label_lineage: bootstrap metacomment survives the emitter');
+
 //-----------------------------------------------------------------------------
 
 //-----------------------------------------------------------------------------
