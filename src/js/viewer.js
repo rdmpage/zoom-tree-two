@@ -181,8 +181,7 @@ PageViewer.prototype.buildBlocks = function ()
 	var visPos = new Array(vis.length);
 	for (var i = 0; i < vis.length; i++) { visPos[i] = pos[vis[i]]; }
 
-	// Stable left-to-right (top-to-bottom) order so palette cycling lands on
-	// adjacent-different colours.
+	// Deterministic order (top-to-bottom) for stable iteration.
 	frontier.sort(function (p, q) { return lo[p] - lo[q]; });
 
 	// Same x->pixel mapping glyph.js uses, so the block's left edge lines up with
@@ -204,7 +203,13 @@ PageViewer.prototype.buildBlocks = function ()
 		var top = this.paddingTop + this.cumY[a];
 		var bot = this.paddingTop + this.cumY[b + 1];
 		var left = Math.max(0, leftGap + this.tree.x[id] * scale - BLOCK_LEFT_PAD);
-		var col = CLADE_PALETTE[f % CLADE_PALETTE.length];
+		// Colour the block by the clade's own Tree-Colors hue (the SAME per-node
+		// value its collapsed triangle uses), so triangle and block match and the
+		// colour is stable across zoom — it's a fixed property of the frontier
+		// node, not of where it lands in the current frontier.  Fall back to a
+		// per-node palette index (still zoom-stable) when the tree has no colour.
+		var col = (this.tree.color && this.tree.color[id]) ||
+		          CLADE_PALETTE[id % CLADE_PALETTE.length];
 		var disp = displayCladeName(this.tree.labels[id]);
 
 		html.push(
